@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <thread>
 
 #include "reed/adb.hpp"
@@ -460,32 +461,74 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       (config && !config->port.empty()) ? config->port : port;
   int keepalive_interval = config ? config->keepalive_interval : 10;
 
-  reed::Device device(actual_port, verbose);
-  if (!device.connect()) {
-    std::cerr << "Failed to connect to " << actual_port << "\n";
-    return 1;
-  }
-
-  device.handshake();
-
   reed::ScreenConfig screen_config;
   screen_config.media = state->media;
   screen_config.ratio = state->ratio;
   screen_config.screen_mode = state->screen_mode;
   screen_config.play_mode = state->play_mode;
 
-  device.set_screen_config(screen_config);
-  device.set_brightness(state->brightness);
+  auto device = std::make_unique<reed::Device>(actual_port, verbose);
+  if (!device->connect()) {
+    std::cerr << "Failed to connect to " << actual_port << "\n";
+    return 1;
+  }
+
+  device->handshake();
+  device->set_screen_config(screen_config);
+  device->set_brightness(state->brightness);
 
   std::cout << "Display restored. Running keepalive...\n";
 
   std::signal(SIGINT, signal_handler);
   std::signal(SIGTERM, signal_handler);
 
+  auto restore = [&](reed::Device& dev) {
+    if (!dev.handshake()) return false;
+    dev.set_screen_config(screen_config);
+    dev.set_brightness(state->brightness);
+    return true;
+  };
+
+  // Reconnect after a handshake failure: the serial fd can die silently on USB
+  // suspend/resume or when the device renumbers (/dev/ttyACM0 -> ttyACM1). Try
+  // the current port first, then rescan.
+  auto reconnect = [&]() -> bool {
+    device->disconnect();
+    if (device->connect() && restore(*device)) {
+      std::cerr << "keepalive: reconnected on " << device->port() << "\n";
+      return true;
+    }
+    std::cerr << "keepalive: scanning for device...\n";
+    auto found = reed::Device::find_device(verbose);
+    if (!found) {
+      std::cerr << "keepalive: no device found\n";
+      return false;
+    }
+    device = std::make_unique<reed::Device>(*found, verbose);
+    if (device->connect() && restore(*device)) {
+      std::cerr << "keepalive: reconnected on " << *found << "\n";
+      return true;
+    }
+    std::cerr << "keepalive: found " << *found << " but handshake failed\n";
+    return false;
+  };
+
+  int failures = 0;
   while (g_running) {
     std::this_thread::sleep_for(std::chrono::seconds(keepalive_interval));
     if (!g_running) break;
-    device.handshake();
+
+    if (device->handshake()) {
+      failures = 0;
+      continue;
+    }
+
+    ++failures;
+    std::cerr << "keepalive: handshake failed (#" << failures
+              << "), reconnecting...\n";
+    if (reconnect()) {
+      failures = 0;
+    }
   }
 
   return 0;
