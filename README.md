@@ -4,6 +4,9 @@ Linux CLI for Tryx Panorama SE AIO cooler display, reverse-engineered protocol, 
 
 https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 
+> **Fork note:** This is a fork of [fadli0029/reed-tpse](https://github.com/fadli0029/reed-tpse) — all upstream credit to [@fadli0029](https://github.com/fadli0029) for the reverse-engineering work and the original implementation. Changes in this fork:
+> - Keepalive daemon now reconnects (and re-applies the saved display state) when `handshake()` fails, instead of silently writing to a dead fd after USB suspend/resume or `/dev/ttyACM*` renumbering. Reconnect events are logged to stderr so they show up in `journalctl` in real time.
+
 ## Currently supported features
 
 - Upload images, videos, and GIFs (auto-converts to MP4)
