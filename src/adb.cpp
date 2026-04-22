@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdio>
+#include <iostream>
 #include <memory>
 #include <sstream>
 
@@ -53,21 +54,36 @@ std::optional<std::string> Adb::run_command(
   return result;
 }
 
-bool Adb::is_device_connected() {
-  auto result = run_command({"devices"});
-  if (!result) {
-    return false;
-  }
+namespace {
 
-  std::istringstream iss(*result);
+// True if `adb devices` output lists at least one device in state "device".
+bool devices_output_has_device(const std::string& output) {
+  std::istringstream iss(output);
   std::string line;
   while (std::getline(iss, line)) {
     if (line.find("\tdevice") != std::string::npos) {
       return true;
     }
   }
-
   return false;
+}
+
+}  // namespace
+
+bool Adb::is_device_connected() {
+  auto result = run_command({"devices"});
+  if (result && devices_output_has_device(*result)) {
+    return true;
+  }
+
+  // The adb server occasionally loses track of a connected device after a USB
+  // hotplug event — `adb devices` returns an empty list even though the cooler
+  // is physically attached. Recover by bouncing the server and retrying once.
+  std::cerr << "adb: no device visible, bouncing server and retrying...\n";
+  run_command({"kill-server"});
+  run_command({"start-server"});
+  result = run_command({"devices"});
+  return result && devices_output_has_device(*result);
 }
 
 bool Adb::push(const std::string& local_path, const std::string& remote_name) {
