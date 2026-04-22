@@ -30,6 +30,27 @@ int get_int(const picojson::value& v, const std::string& key, int def = 0) {
   return static_cast<int>(it->second.get<double>());
 }
 
+bool get_bool(const picojson::value& v, const std::string& key, bool def = false) {
+  if (!v.is<picojson::object>()) return def;
+  const auto& obj = v.get<picojson::object>();
+  auto it = obj.find(key);
+  if (it == obj.end() || !it->second.is<bool>()) return def;
+  return it->second.get<bool>();
+}
+
+std::vector<std::string> get_string_array(const picojson::value& v,
+                                          const std::string& key) {
+  std::vector<std::string> out;
+  if (!v.is<picojson::object>()) return out;
+  const auto& obj = v.get<picojson::object>();
+  auto it = obj.find(key);
+  if (it == obj.end() || !it->second.is<picojson::array>()) return out;
+  for (const auto& elem : it->second.get<picojson::array>()) {
+    if (elem.is<std::string>()) out.push_back(elem.get<std::string>());
+  }
+  return out;
+}
+
 const picojson::value& get_value(const picojson::value& v,
                                  const std::string& key) {
   static picojson::value null_val;
@@ -164,6 +185,23 @@ std::optional<DisplayState> ConfigManager::load_state() {
   state.play_mode = get_string(json, "play_mode", state.play_mode);
   state.brightness = get_int(json, "brightness", state.brightness);
 
+  const auto& hud_val = get_value(json, "hud");
+  if (hud_val.is<picojson::object>()) {
+    HudConfig& h = state.hud;
+    h.enabled = get_bool(hud_val, "enabled", h.enabled);
+    h.metrics = get_string_array(hud_val, "metrics");
+    h.position = get_string(hud_val, "position", h.position);
+    h.align = get_string(hud_val, "align", h.align);
+    h.color = get_string(hud_val, "color", h.color);
+    h.badges = get_string_array(hud_val, "badges");
+    h.push_interval_sec =
+        get_int(hud_val, "push_interval_sec", h.push_interval_sec);
+    h.temperature_unit =
+        get_string(hud_val, "temperature_unit", h.temperature_unit);
+    h.cpu_name = get_string(hud_val, "cpu_name", h.cpu_name);
+    h.gpu_name = get_string(hud_val, "gpu_name", h.gpu_name);
+  }
+
   return state;
 }
 
@@ -188,6 +226,28 @@ bool ConfigManager::save_state(const DisplayState& state) {
   obj["screen_mode"] = picojson::value(state.screen_mode);
   obj["play_mode"] = picojson::value(state.play_mode);
   obj["brightness"] = picojson::value(static_cast<double>(state.brightness));
+
+  picojson::array hud_metrics_arr;
+  for (const auto& m : state.hud.metrics) {
+    hud_metrics_arr.push_back(picojson::value(m));
+  }
+  picojson::array hud_badges_arr;
+  for (const auto& b : state.hud.badges) {
+    hud_badges_arr.push_back(picojson::value(b));
+  }
+  picojson::object hud_obj;
+  hud_obj["enabled"] = picojson::value(state.hud.enabled);
+  hud_obj["metrics"] = picojson::value(hud_metrics_arr);
+  hud_obj["position"] = picojson::value(state.hud.position);
+  hud_obj["align"] = picojson::value(state.hud.align);
+  hud_obj["color"] = picojson::value(state.hud.color);
+  hud_obj["badges"] = picojson::value(hud_badges_arr);
+  hud_obj["push_interval_sec"] =
+      picojson::value(static_cast<double>(state.hud.push_interval_sec));
+  hud_obj["temperature_unit"] = picojson::value(state.hud.temperature_unit);
+  hud_obj["cpu_name"] = picojson::value(state.hud.cpu_name);
+  hud_obj["gpu_name"] = picojson::value(state.hud.gpu_name);
+  obj["hud"] = picojson::value(hud_obj);
 
   file << picojson::value(obj).serialize() << "\n";
   return file.good();

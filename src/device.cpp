@@ -443,26 +443,33 @@ std::optional<DeviceInfo> Device::handshake() {
 }
 
 std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
-  // Build media array
   picojson::array media_arr;
   for (const auto& m : config.media) {
     media_arr.push_back(picojson::value(m));
   }
 
-  // Build filter object
   picojson::object filter;
   filter["value"] = picojson::value("");
-  filter["opacity"] = picojson::value(0.0);
+  filter["opacity"] =
+      picojson::value(static_cast<double>(config.settings.filter_opacity));
 
-  // Build settings object
+  picojson::array badges_arr;
+  for (const auto& b : config.settings.badges) {
+    badges_arr.push_back(picojson::value(b));
+  }
+
   picojson::object settings;
-  settings["position"] = picojson::value("Top");
-  settings["color"] = picojson::value("#FFFFFF");
-  settings["align"] = picojson::value("Center");
-  settings["badges"] = picojson::value(picojson::array());
+  settings["position"] = picojson::value(config.settings.position);
+  settings["color"] = picojson::value(config.settings.color);
+  settings["align"] = picojson::value(config.settings.align);
+  settings["badges"] = picojson::value(badges_arr);
   settings["filter"] = picojson::value(filter);
 
-  // Build config object
+  picojson::array sysinfo_arr;
+  for (const auto& label : config.sysinfo_display) {
+    sysinfo_arr.push_back(picojson::value(label));
+  }
+
   picojson::object cfg;
   cfg["Type"] = picojson::value("Custom");
   cfg["id"] = picojson::value("Customization");
@@ -471,11 +478,11 @@ std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
   cfg["playMode"] = picojson::value(config.play_mode);
   cfg["media"] = picojson::value(media_arr);
   cfg["settings"] = picojson::value(settings);
-  cfg["sysinfoDisplay"] = picojson::value(picojson::array());
+  cfg["sysinfoDisplay"] = picojson::value(sysinfo_arr);
 
   std::string content = picojson::value(cfg).serialize();
 
-  // Send twice (workaround for cached config)
+  // Firmware requires two POSTs with a small gap to reliably apply.
   send_command("POST", "waterBlockScreenId", content);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   return send_command("POST", "waterBlockScreenId", content);
@@ -498,6 +505,126 @@ std::optional<Response> Device::delete_media(
   obj["include"] = picojson::value(file_arr);
   std::string content = picojson::value(obj).serialize();
   return send_command("POST", "mediaDelete", content);
+}
+
+std::optional<Response> Device::send_sysinfo(
+    const std::vector<SysinfoData>& data) {
+  picojson::object cpu, gpu, memory, motherboard, disk, network;
+  picojson::array fans;
+
+  cpu["load"] = picojson::value(0.0);
+  cpu["temperature"] = picojson::value(0.0);
+  cpu["speedAverage"] = picojson::value(0.0);
+  cpu["voltage"] = picojson::value(0.0);
+  cpu["power"] = picojson::value(0.0);
+  cpu["fanAverage"] = picojson::value(0.0);
+
+  gpu["load"] = picojson::value(0.0);
+  // GPU temperature is a string in the PcInfo blob, unlike every other temp.
+  gpu["temperature"] = picojson::value(std::string("0"));
+  gpu["speed"] = picojson::value(0.0);
+  gpu["voltage"] = picojson::value(0.0);
+  gpu["power"] = picojson::value(0.0);
+  gpu["fan"] = picojson::value(0.0);
+
+  memory["load"] = picojson::value(0.0);
+  memory["speed"] = picojson::value(0.0);
+  memory["temperature"] = picojson::value(0.0);
+  memory["total"] = picojson::value(0.0);
+  memory["used"] = picojson::value(0.0);
+
+  motherboard["temperature"] = picojson::value(0.0);
+
+  disk["load"] = picojson::value(0.0);
+  disk["used"] = picojson::value(0.0);
+  disk["total"] = picojson::value(0.0);
+  disk["temperature"] = picojson::value(0.0);
+  disk["activity"] = picojson::value(0.0);
+  disk["readSpeed"] = picojson::value(0.0);
+  disk["writeSpeed"] = picojson::value(0.0);
+
+  network["download"] = picojson::value(0.0);
+  network["upload"] = picojson::value(0.0);
+
+  auto to_double = [](const std::string& s) -> double {
+    try {
+      return std::stod(s);
+    } catch (...) {
+      return 0.0;
+    }
+  };
+
+  for (const auto& item : data) {
+    if (item.label == "CPU Temperature") {
+      cpu["temperature"] = picojson::value(to_double(item.value));
+    } else if (item.label == "CPU Frequency") {
+      cpu["speedAverage"] = picojson::value(to_double(item.value));
+    } else if (item.label == "CPU Usage") {
+      cpu["load"] = picojson::value(to_double(item.value));
+    } else if (item.label == "CPU Voltage") {
+      cpu["voltage"] = picojson::value(to_double(item.value));
+    } else if (item.label == "GPU Temperature") {
+      gpu["temperature"] = picojson::value(item.value);
+    } else if (item.label == "GPU Frequency") {
+      gpu["speed"] = picojson::value(to_double(item.value));
+    } else if (item.label == "GPU Usage") {
+      gpu["load"] = picojson::value(to_double(item.value));
+    } else if (item.label == "GPU Voltage") {
+      gpu["voltage"] = picojson::value(to_double(item.value));
+    } else if (item.label == "Motherboard Temperature") {
+      motherboard["temperature"] = picojson::value(to_double(item.value));
+    } else if (item.label == "Memory Frequency") {
+      memory["speed"] = picojson::value(to_double(item.value));
+    } else if (item.label == "Memory Utilization") {
+      memory["load"] = picojson::value(to_double(item.value));
+    } else if (item.label == "Hard Disk Temperature") {
+      disk["temperature"] = picojson::value(to_double(item.value));
+    }
+  }
+
+  picojson::object pc_info;
+  pc_info["cpu"] = picojson::value(cpu);
+  pc_info["gpu"] = picojson::value(gpu);
+  pc_info["memory"] = picojson::value(memory);
+  pc_info["motherboard"] = picojson::value(motherboard);
+  pc_info["disk"] = picojson::value(disk);
+  pc_info["network"] = picojson::value(network);
+  pc_info["fans"] = picojson::value(fans);
+  pc_info["timestamp"] = picojson::value(static_cast<double>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count()));
+
+  std::string content = picojson::value(pc_info).serialize();
+  return send_command("POST", "all", content, false);
+}
+
+std::optional<Response> Device::set_sysinfo_display(
+    const std::vector<std::string>& labels) {
+  picojson::array items;
+  for (const auto& l : labels) {
+    items.push_back(picojson::value(l));
+  }
+  picojson::object obj;
+  obj["items"] = picojson::value(items);
+  std::string content = picojson::value(obj).serialize();
+  return send_command("POST", "sysinfoDisplay", content, false);
+}
+
+std::optional<Response> Device::send_spec(const std::string& cpu_name,
+                                          const std::string& gpu_name) {
+  picojson::object obj;
+  obj["cpu"] = picojson::value(cpu_name);
+  obj["gpu"] = picojson::value(gpu_name);
+  std::string content = picojson::value(obj).serialize();
+  return send_command("POST", "spec", content);
+}
+
+std::optional<Response> Device::set_temperature_unit(const std::string& unit) {
+  picojson::object obj;
+  obj["value"] = picojson::value(unit);  // "Celsius" or "Fahrenheit"
+  std::string content = picojson::value(obj).serialize();
+  return send_command("POST", "temperature", content);
 }
 
 }  // namespace reed

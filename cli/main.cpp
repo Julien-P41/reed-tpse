@@ -12,6 +12,10 @@
 #include "reed/config.hpp"
 #include "reed/device.hpp"
 #include "reed/media.hpp"
+#include "reed/sysinfo.hpp"
+
+#include <set>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
@@ -40,7 +44,10 @@ static void print_usage(const char* prog) {
          "  delete <file...>        Delete media files from device\n"
          "  daemon start            Start background daemon\n"
          "  daemon stop             Stop background daemon\n"
-         "  daemon status           Show daemon status\n\n"
+         "  daemon status           Show daemon status\n"
+         "  hud configure           Configure on-device telemetry overlay\n"
+         "  hud clear               Disable the telemetry overlay\n"
+         "  hud status              Show current HUD configuration\n\n"
          "Options:\n"
          "  -p, --port <path>       Serial port (auto-detected if not "
          "specified)\n"
@@ -51,8 +58,105 @@ static void print_usage(const char* prog) {
          "  --foreground            Run daemon in foreground\n"
          "  --json                  Machine-readable output (status)\n"
          "  --watch <seconds>       Poll until interrupted (status)\n"
-         "  --system                Act on the system-scope unit (daemon)\n";
+         "  --system                Act on the system-scope unit (daemon)\n\n"
+         "HUD options (with `hud configure`):\n"
+         "  --metrics <csv>         Comma-separated labels, max 3. Known labels:\n"
+         "                          CPU Temperature, CPU Frequency, CPU Usage,\n"
+         "                          CPU Voltage, GPU Temperature, GPU Frequency,\n"
+         "                          GPU Usage, GPU Voltage, Motherboard Temperature,\n"
+         "                          Memory Frequency, Memory Utilization,\n"
+         "                          Hard Disk Temperature, Date & Time\n"
+         "  --position <pos>        Top | Center | Bottom (default: Top)\n"
+         "  --align <align>         Left | Center | Right (default: Left)\n"
+         "  --color <hex>           e.g. #FFFFFF (default: #FFFFFF)\n"
+         "  --badges <csv>          cpu,gpu (or none). Default: none\n"
+         "  --interval <sec>        Push interval in seconds (default: 5)\n"
+         "  --unit <unit>           Celsius | Fahrenheit (default: Celsius)\n"
+         "  --cpu-name <str>        Override auto-detected CPU name\n"
+         "  --gpu-name <str>        Override auto-detected GPU name\n";
 }
+
+namespace {
+
+// Firmware-defined label set. Anything outside this is rejected with a clear
+// error so typos don't silently produce a dead overlay slot.
+const std::set<std::string>& known_hud_labels() {
+  static const std::set<std::string> labels = {
+      "CPU Temperature",         "CPU Frequency",       "CPU Usage",
+      "CPU Voltage",             "GPU Temperature",     "GPU Frequency",
+      "GPU Usage",               "GPU Voltage",         "Motherboard Temperature",
+      "Memory Frequency",        "Memory Utilization",  "Hard Disk Temperature",
+      "Date & Time",
+  };
+  return labels;
+}
+
+std::vector<std::string> split_csv(const std::string& s) {
+  std::vector<std::string> out;
+  std::string token;
+  std::istringstream ss(s);
+  while (std::getline(ss, token, ',')) {
+    size_t start = token.find_first_not_of(" \t\r\n");
+    size_t end = token.find_last_not_of(" \t\r\n");
+    if (start != std::string::npos) {
+      out.push_back(token.substr(start, end - start + 1));
+    }
+  }
+  return out;
+}
+
+// Build the SysinfoData payload the device expects for the given labels.
+std::vector<reed::SysinfoData> build_sysinfo(
+    const std::vector<std::string>& labels, const reed::SystemMetrics& m) {
+  std::vector<reed::SysinfoData> out;
+  auto fmt = [](double v, int precision = 0) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.*f", precision, v);
+    return std::string(buf);
+  };
+  for (const auto& label : labels) {
+    reed::SysinfoData d;
+    d.label = label;
+    if (label == "CPU Temperature") {
+      d.value = fmt(m.cpu.temperature_c);
+      d.unit = "°C";
+    } else if (label == "CPU Frequency") {
+      d.value = fmt(m.cpu.frequency_mhz);
+      d.unit = "MHz";
+    } else if (label == "CPU Usage") {
+      d.value = fmt(m.cpu.usage_percent, 1);
+      d.unit = "%";
+    } else if (label == "GPU Temperature") {
+      d.value = fmt(m.gpu.temperature_c);
+      d.unit = "°C";
+    } else if (label == "GPU Frequency") {
+      d.value = fmt(m.gpu.frequency_mhz);
+      d.unit = "MHz";
+    } else if (label == "GPU Usage") {
+      d.value = fmt(m.gpu.usage_percent);
+      d.unit = "%";
+    } else if (label == "GPU Voltage") {
+      d.value = fmt(m.gpu.voltage_v, 3);
+      d.unit = "V";
+    } else if (label == "Memory Utilization") {
+      d.value = fmt(m.memory.usage_percent, 1);
+      d.unit = "%";
+    } else if (label == "Memory Frequency") {
+      d.value = fmt(m.memory.frequency_mhz);
+      d.unit = "MHz";
+    } else {
+      // Labels we don't yet collect (CPU Voltage, Motherboard Temperature,
+      // Hard Disk Temperature, Date & Time) are still valid for configure —
+      // we send zeros so the overlay slot exists, and Date & Time is
+      // rendered from the device's own clock.
+      d.value = "0";
+    }
+    out.push_back(d);
+  }
+  return out;
+}
+
+}  // namespace
 
 static int cmd_info(const std::string& port, bool verbose) {
   reed::Device device(port, verbose);
@@ -466,6 +570,13 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   screen_config.ratio = state->ratio;
   screen_config.screen_mode = state->screen_mode;
   screen_config.play_mode = state->play_mode;
+  if (state->hud.enabled) {
+    screen_config.sysinfo_display = state->hud.metrics;
+    screen_config.settings.position = state->hud.position;
+    screen_config.settings.align = state->hud.align;
+    screen_config.settings.color = state->hud.color;
+    screen_config.settings.badges = state->hud.badges;
+  }
 
   auto device = std::make_unique<reed::Device>(actual_port, verbose);
   if (!device->connect()) {
@@ -474,16 +585,33 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   }
 
   device->handshake();
+  if (state->hud.enabled) {
+    device->send_spec(state->hud.cpu_name, state->hud.gpu_name);
+    device->set_temperature_unit(state->hud.temperature_unit);
+  }
   device->set_screen_config(screen_config);
   device->set_brightness(state->brightness);
 
-  std::cout << "Display restored. Running keepalive...\n";
+  if (state->hud.enabled) {
+    std::cout << "Display restored with HUD (" << state->hud.metrics.size()
+              << " metric" << (state->hud.metrics.size() == 1 ? "" : "s")
+              << ", push every " << state->hud.push_interval_sec << "s).\n";
+  } else {
+    std::cout << "Display restored. Running keepalive...\n";
+  }
 
   std::signal(SIGINT, signal_handler);
   std::signal(SIGTERM, signal_handler);
 
+  reed::SystemMonitor monitor;
+  bool first_handshake_ok = false;
+
   auto restore = [&](reed::Device& dev) {
     if (!dev.handshake()) return false;
+    if (state->hud.enabled) {
+      dev.send_spec(state->hud.cpu_name, state->hud.gpu_name);
+      dev.set_temperature_unit(state->hud.temperature_unit);
+    }
     dev.set_screen_config(screen_config);
     dev.set_brightness(state->brightness);
     return true;
@@ -513,24 +641,262 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     return false;
   };
 
+  using clock = std::chrono::steady_clock;
+  auto now = clock::now();
+  auto next_handshake = now + std::chrono::seconds(keepalive_interval);
+  auto next_sysinfo =
+      state->hud.enabled
+          ? now + std::chrono::seconds(state->hud.push_interval_sec)
+          : clock::time_point::max();
+
   int failures = 0;
   while (g_running) {
-    std::this_thread::sleep_for(std::chrono::seconds(keepalive_interval));
+    // Tick once a second so we're responsive to both cadences and SIGTERM.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     if (!g_running) break;
 
-    if (device->handshake()) {
-      failures = 0;
-      continue;
+    now = clock::now();
+
+    if (now >= next_handshake) {
+      next_handshake = now + std::chrono::seconds(keepalive_interval);
+      if (device->handshake()) {
+        failures = 0;
+        first_handshake_ok = true;
+      } else {
+        ++failures;
+        std::cerr << "keepalive: handshake failed (#" << failures
+                  << "), reconnecting...\n";
+        if (reconnect()) {
+          failures = 0;
+          first_handshake_ok = true;
+        }
+      }
     }
 
-    ++failures;
-    std::cerr << "keepalive: handshake failed (#" << failures
-              << "), reconnecting...\n";
-    if (reconnect()) {
-      failures = 0;
+    if (state->hud.enabled && now >= next_sysinfo) {
+      next_sysinfo = now + std::chrono::seconds(state->hud.push_interval_sec);
+      // Gate first push on a successful handshake — otherwise startup issues
+      // surface as "HUD shows zeros" instead of "device didn't respond".
+      if (first_handshake_ok && device->is_connected()) {
+        auto metrics = monitor.sample();
+        device->send_sysinfo(build_sysinfo(state->hud.metrics, metrics));
+      }
     }
   }
 
+  return 0;
+}
+
+static int cmd_hud(const std::string& port, const std::vector<std::string>& args,
+                   bool verbose) {
+  if (args.empty()) {
+    std::cerr << "Usage: reed-tpse hud <configure|clear|status> [options]\n";
+    return 1;
+  }
+  const std::string& action = args[0];
+
+  if (action == "status") {
+    auto state = reed::ConfigManager::load_state();
+    if (!state) {
+      std::cout << "No saved display state.\n";
+      return 0;
+    }
+    const auto& h = state->hud;
+    std::cout << "HUD: " << (h.enabled ? "enabled" : "disabled") << "\n";
+    std::cout << "  Metrics:";
+    if (h.metrics.empty()) std::cout << " (none)";
+    for (const auto& m : h.metrics) std::cout << " [" << m << "]";
+    std::cout << "\n";
+    std::cout << "  Position: " << h.position << "\n";
+    std::cout << "  Align: " << h.align << "\n";
+    std::cout << "  Color: " << h.color << "\n";
+    std::cout << "  Badges:";
+    if (h.badges.empty()) std::cout << " (none)";
+    for (const auto& b : h.badges) std::cout << " [" << b << "]";
+    std::cout << "\n";
+    std::cout << "  Push interval: " << h.push_interval_sec << "s\n";
+    std::cout << "  Temperature unit: " << h.temperature_unit << "\n";
+    std::cout << "  CPU: " << (h.cpu_name.empty() ? "(auto)" : h.cpu_name) << "\n";
+    std::cout << "  GPU: " << (h.gpu_name.empty() ? "(auto)" : h.gpu_name) << "\n";
+    return 0;
+  }
+
+  // Load existing state so we preserve media/brightness/ratio.
+  reed::DisplayState state;
+  if (auto loaded = reed::ConfigManager::load_state()) {
+    state = *loaded;
+  }
+
+  if (action == "clear") {
+    state.hud = reed::HudConfig{};  // reset
+    if (!reed::ConfigManager::save_state(state)) {
+      std::cerr << "Failed to save state\n";
+      return 1;
+    }
+    // Push a screen config without HUD fields so the device stops rendering
+    // the overlay immediately. Requires media to be present in state.
+    if (!port.empty() && !state.media.empty()) {
+      reed::Device device(port, verbose);
+      if (device.connect()) {
+        device.handshake();
+        reed::ScreenConfig cfg;
+        cfg.media = state.media;
+        cfg.ratio = state.ratio;
+        cfg.screen_mode = state.screen_mode;
+        cfg.play_mode = state.play_mode;
+        device.set_screen_config(cfg);
+      }
+    }
+    std::cout << "HUD disabled.\n";
+    return 0;
+  }
+
+  if (action != "configure") {
+    std::cerr << "Unknown hud action: " << action << "\n";
+    return 1;
+  }
+
+  // Parse hud configure flags from args[1..].
+  reed::HudConfig h = state.hud;  // start from current so unspecified flags stick
+  h.enabled = true;
+  bool metrics_provided = false;
+
+  for (size_t i = 1; i < args.size(); ++i) {
+    const std::string& a = args[i];
+    auto next = [&](const char* flag) -> std::string {
+      if (++i >= args.size()) {
+        std::cerr << "Missing value for " << flag << "\n";
+        std::exit(1);
+      }
+      return args[i];
+    };
+    if (a == "--metrics") {
+      h.metrics = split_csv(next("--metrics"));
+      metrics_provided = true;
+    } else if (a == "--position") {
+      h.position = next("--position");
+    } else if (a == "--align") {
+      h.align = next("--align");
+    } else if (a == "--color") {
+      h.color = next("--color");
+    } else if (a == "--badges") {
+      h.badges.clear();
+      for (const auto& tok : split_csv(next("--badges"))) {
+        if (tok == "cpu" || tok == "CPU" || tok == "CPU Badge") {
+          h.badges.push_back("CPU Badge");
+        } else if (tok == "gpu" || tok == "GPU" || tok == "GPU Badge") {
+          h.badges.push_back("GPU Badge");
+        } else if (tok == "none") {
+          h.badges.clear();
+          break;
+        } else {
+          std::cerr << "Unknown badge: " << tok
+                    << " (expected cpu, gpu, or none)\n";
+          return 1;
+        }
+      }
+    } else if (a == "--interval") {
+      h.push_interval_sec = std::atoi(next("--interval").c_str());
+      if (h.push_interval_sec < 1) h.push_interval_sec = 1;
+    } else if (a == "--unit") {
+      h.temperature_unit = next("--unit");
+    } else if (a == "--cpu-name") {
+      h.cpu_name = next("--cpu-name");
+    } else if (a == "--gpu-name") {
+      h.gpu_name = next("--gpu-name");
+    } else {
+      std::cerr << "Unknown hud option: " << a << "\n";
+      return 1;
+    }
+  }
+
+  if (!metrics_provided && h.metrics.empty()) {
+    std::cerr << "Specify at least one metric via --metrics\n";
+    return 1;
+  }
+
+  // Validate labels.
+  const auto& known = known_hud_labels();
+  for (const auto& m : h.metrics) {
+    if (known.count(m) == 0) {
+      std::cerr << "Unknown metric label: \"" << m << "\"\n";
+      std::cerr << "Run `reed-tpse hud configure --help` (or see `reed-tpse -h`) "
+                   "for the known label list.\n";
+      return 1;
+    }
+  }
+  if (h.metrics.size() > 3) {
+    std::cerr << "Firmware supports at most 3 HUD metrics; got "
+              << h.metrics.size() << ".\n";
+    return 1;
+  }
+
+  // Validate enums.
+  auto one_of = [](const std::string& v,
+                   std::initializer_list<const char*> opts) {
+    for (const char* o : opts)
+      if (v == o) return true;
+    return false;
+  };
+  if (!one_of(h.position, {"Top", "Center", "Bottom"})) {
+    std::cerr << "Invalid --position: " << h.position << "\n";
+    return 1;
+  }
+  if (!one_of(h.align, {"Left", "Center", "Right"})) {
+    std::cerr << "Invalid --align: " << h.align << "\n";
+    return 1;
+  }
+  if (!one_of(h.temperature_unit, {"Celsius", "Fahrenheit"})) {
+    std::cerr << "Invalid --unit: " << h.temperature_unit << "\n";
+    return 1;
+  }
+
+  // Auto-detect CPU/GPU names if not already set.
+  if (h.cpu_name.empty()) h.cpu_name = reed::SystemMonitor::detect_cpu_name();
+  if (h.gpu_name.empty()) h.gpu_name = reed::SystemMonitor::detect_gpu_name();
+
+  state.hud = h;
+  if (!reed::ConfigManager::save_state(state)) {
+    std::cerr << "Failed to save state\n";
+    return 1;
+  }
+
+  // Apply live if we have a device. Non-fatal if not connected — state is
+  // saved and the daemon will apply it on next start.
+  if (!port.empty()) {
+    reed::Device device(port, verbose);
+    if (device.connect() && device.handshake()) {
+      device.send_spec(h.cpu_name, h.gpu_name);
+      device.set_temperature_unit(h.temperature_unit);
+
+      reed::ScreenConfig cfg;
+      cfg.media = state.media;
+      cfg.ratio = state.ratio;
+      cfg.screen_mode = state.screen_mode;
+      cfg.play_mode = state.play_mode;
+      cfg.sysinfo_display = h.metrics;
+      cfg.settings.position = h.position;
+      cfg.settings.align = h.align;
+      cfg.settings.color = h.color;
+      cfg.settings.badges = h.badges;
+      device.set_screen_config(cfg);
+
+      // Prime the overlay with a first sample so the user sees values
+      // immediately instead of waiting for the daemon to tick.
+      reed::SystemMonitor mon;
+      mon.sample();  // first sample primes CPU usage delta
+      auto metrics = mon.sample();
+      device.send_sysinfo(build_sysinfo(h.metrics, metrics));
+    } else {
+      std::cerr << "Warning: could not apply HUD live (device not reachable). "
+                   "State saved; daemon will apply on next start.\n";
+    }
+  }
+
+  std::cout << "HUD configured. Daemon will push updates every "
+            << h.push_interval_sec << "s.\n";
+  std::cout << "Restart the daemon (`reed-tpse daemon stop && reed-tpse daemon "
+               "start`) to pick up the new config.\n";
   return 0;
 }
 
@@ -617,27 +983,37 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // Auto-detect port for commands that need serial connection
+  // Auto-detect port for commands that need serial connection. `hud` uses the
+  // port if available but tolerates absence (state is still saved).
   bool needs_serial = (command == "info" || command == "display" ||
                        command == "brightness" || command == "daemon" ||
-                       command == "status" || command == "raw");
+                       command == "status" || command == "raw" ||
+                       command == "hud");
+  bool serial_optional = (command == "hud");
   if (needs_serial && port.empty()) {
     if (verbose) {
       std::cout << "Auto-detecting device...\n";
     }
     auto detected = reed::Device::find_device(verbose);
     if (!detected) {
-      std::cerr
-          << "No device found. Specify port with -p or check connection.\n";
-      return 1;
-    }
-    port = *detected;
-    if (!verbose) {
-      // Keep this on stdout, where downstream consumers already parse it for
-      // the port (e.g. koconnorgit/tryx-panorama's GUI), but move it aside
-      // for --json so that output stays machine-readable.
-      (json_output ? std::cerr : std::cout) << "Found device at " << port
-                                            << "\n";
+      if (serial_optional) {
+        if (verbose) {
+          std::cerr << "No device found; continuing without live apply.\n";
+        }
+      } else {
+        std::cerr
+            << "No device found. Specify port with -p or check connection.\n";
+        return 1;
+      }
+    } else {
+      port = *detected;
+      if (!verbose) {
+        // Keep this on stdout, where downstream consumers already parse it for
+        // the port (e.g. koconnorgit/tryx-panorama's GUI), but move it aside
+        // for --json so that output stays machine-readable.
+        (json_output ? std::cerr : std::cout)
+            << "Found device at " << port << "\n";
+      }
     }
   }
 
@@ -680,6 +1056,8 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_delete(args);
+  } else if (command == "hud") {
+    return cmd_hud(port, args, verbose);
   } else if (command == "daemon") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse daemon <start|stop|status>\n";

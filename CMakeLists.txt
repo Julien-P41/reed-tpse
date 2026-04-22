@@ -11,6 +11,7 @@ add_library(reed STATIC
     src/adb.cpp
     src/media.cpp
     src/config.cpp
+    src/sysinfo.cpp
 )
 
 target_include_directories(reed PUBLIC

@@ -6,6 +6,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 
 > **Fork note:** This is a fork of [fadli0029/reed-tpse](https://github.com/fadli0029/reed-tpse) — all upstream credit to [@fadli0029](https://github.com/fadli0029) for the reverse-engineering work and the original implementation. Changes in this fork:
 > - Keepalive daemon now reconnects (and re-applies the saved display state) when `handshake()` fails, instead of silently writing to a dead fd after USB suspend/resume or `/dev/ttyACM*` renumbering. Reconnect events are logged to stderr so they show up in `journalctl` in real time.
+> - On-device system telemetry HUD. The cooler firmware renders the overlay natively (up to 3 metrics with position/alignment/color and CPU/GPU marketing badges) — no host-side frame compositing required. CPU/GPU/memory samples are collected from `/proc`, `/sys`, and `nvidia-smi`, then pushed by the keepalive daemon at a configurable cadence (default 5s). See the [HUD](#hud-telemetry-overlay) section below.
 
 ## Currently supported features
 
@@ -14,6 +15,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - Read device status: fan/pump RPM, health warnings, free storage
 - Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
+- On-device system telemetry overlay (CPU/GPU temp, usage, frequency, voltage; RAM utilization; motherboard/disk temps; date & time)
 - systemd service (user or system scope) for persistent display across reboots
 - Exclusive port locking, so a second instance can't corrupt the first's replies
 - Auto-detects device (scans /dev/ttyACM*)
@@ -21,21 +23,19 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 
 ## TODO
 
-- [ ] CPU stats overlay (temperature, usage, clock speed)
-- [ ] GPU stats (temperature, usage, VRAM, clock speed)
-- [ ] RAM usage
+- [x] CPU stats overlay (temperature, usage, clock speed) — `reed-tpse hud`
+- [x] GPU stats (temperature, usage, clock speed) — `reed-tpse hud`
+- [x] RAM usage — `reed-tpse hud`
 - [x] Fan/pump RPM display — `reed-tpse status`
+- [ ] Custom overlay layouts (beyond the firmware's 9 anchor points and 3-metric cap)
 - [ ] Network throughput
-- [ ] Custom overlay layouts
+- [ ] Screen Splitting mode support (6-metric layout)
 - [ ] Fan curve / pump control (`fanLCDSet`, `turboPump`)
 - [ ] Screen behaviour: `displayInSleep`, `rotate`, `waterfallMode`, `power`
 
-**Good news on the stats overlays:** they do not need host-side image
-generation. The device renders them itself — the screen config object already
-carries a `sysinfoDisplay` array and a `settings{position,color,align,badges}`
-block (both currently sent empty), and the item names are plain strings such as
-`CPU Temperature`, `GPU Usage`, `Memory Utilization`, `Date&Time`, with
-`CPU Badge`/`GPU Badge` for the badges. The host only has to push values.
+The stats overlays never needed host-side image generation: the device renders
+them itself. The screen config object carries a `sysinfoDisplay` array and a
+`settings{position,color,align,badges}` block, and the host only pushes values.
 
 ## Requirements
 
@@ -124,6 +124,9 @@ reed-tpse delete <file>          # Delete file from device
 reed-tpse daemon start           # Start background keepalive
 reed-tpse daemon stop            # Stop daemon
 reed-tpse daemon status          # Check daemon status
+reed-tpse hud configure ...      # Configure on-device telemetry overlay
+reed-tpse hud clear              # Disable the telemetry overlay
+reed-tpse hud status             # Show current HUD configuration
 ```
 
 Add `--system` to any `daemon` subcommand to address the system-scope unit
@@ -175,6 +178,63 @@ waterBlockScreenId · rotate · recovery · preset · sysinfoDisplay
 displayInSleep · waterfallMode · fanLCDSet · turboPump · mediaDelete
 power · reboot
 ```
+
+## HUD (telemetry overlay)
+
+The Panorama's firmware natively renders a system-telemetry overlay on top of
+the configured media — no host-side frame compositing is involved. We send it
+(1) a layout config (which labels to show, position, color, CPU/GPU badges)
+and (2) periodic value pushes; the cooler draws everything itself.
+
+```bash
+# Pick up to 3 metrics, place them top-left, show CPU/GPU badges
+reed-tpse hud configure \
+    --metrics "CPU Temperature,GPU Temperature,GPU Usage" \
+    --position Top --align Left --color "#FFFFFF" \
+    --badges cpu,gpu --interval 5
+
+reed-tpse hud status    # show current config
+reed-tpse hud clear     # turn the overlay off
+```
+
+### Known labels
+
+Metric labels are defined by the firmware. Unknown labels are rejected:
+
+```
+CPU Temperature, CPU Frequency, CPU Usage, CPU Voltage,
+GPU Temperature, GPU Frequency, GPU Usage, GPU Voltage,
+Motherboard Temperature, Memory Frequency, Memory Utilization,
+Hard Disk Temperature, Date & Time
+```
+
+### Layout options
+
+- `--position Top|Center|Bottom` × `--align Left|Center|Right` → 9 anchor points
+- `--color "#RRGGBB"` text color
+- `--badges cpu,gpu` draws CPU/GPU marketing-name chips alongside the values
+  (auto-detected from `/proc/cpuinfo` and `nvidia-smi`; override with
+  `--cpu-name` / `--gpu-name`)
+- `--unit Celsius|Fahrenheit`
+- `--interval <sec>` — how often the daemon pushes fresh values (default 5s)
+
+**Firmware limits:** 3 metrics max per screen; placement is the 9-anchor grid,
+not arbitrary pixel coordinates. If you need free placement or more than 3
+metrics, you'd have to composite frames host-side (not supported here).
+
+### Telemetry sources
+
+Values are sampled in the keepalive daemon from:
+
+- CPU: `/sys/class/hwmon` (`k10temp` / `zenpower` / `coretemp`),
+  `/proc/stat` (delta-based usage), per-core `scaling_cur_freq`
+- GPU: `nvidia-smi` if present (preferred for dGPU), otherwise
+  `/sys/class/drm/card*/device` for AMD (`gpu_busy_percent`, hwmon,
+  `pp_dpm_sclk`)
+- Memory: `/proc/meminfo`
+
+The HUD config is persisted in `~/.local/state/reed-tpse/display.json`
+alongside the media state, so it survives reboots.
 
 ## Configuration
 

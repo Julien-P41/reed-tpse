@@ -18,11 +18,27 @@ struct DeviceInfo {
   std::vector<std::string> attributes;
 };
 
+struct DisplaySettings {
+  std::string position = "Top";     // "Top", "Center", "Bottom"
+  std::string color = "#FFFFFF";    // hex
+  std::string align = "Center";     // "Left", "Center", "Right"
+  std::vector<std::string> badges;  // "CPU Badge", "GPU Badge"
+  int filter_opacity = 0;           // 0-100
+};
+
 struct ScreenConfig {
   std::vector<std::string> media;
   std::string screen_mode = "Full Screen";
   std::string ratio = "2:1";
   std::string play_mode = "Single";
+  std::vector<std::string> sysinfo_display;  // max 3 firmware-defined labels
+  DisplaySettings settings;
+};
+
+struct SysinfoData {
+  std::string label;
+  std::string value;
+  std::string unit;
 };
 
 // One entry of the device's own health report. The device currently only
@@ -89,6 +105,16 @@ class Device {
   std::optional<Response> set_screen_config(const ScreenConfig& config);
   std::optional<Response> set_brightness(int value);
   std::optional<Response> delete_media(const std::vector<std::string>& files);
+
+  // HUD: on-device telemetry overlay support.
+  // Firmware renders up to 3 metrics from a fixed label set on top of the
+  // configured media. Labels and the PcInfo shape are defined by the cooler.
+  std::optional<Response> send_sysinfo(const std::vector<SysinfoData>& data);
+  std::optional<Response> set_sysinfo_display(
+      const std::vector<std::string>& labels);
+  std::optional<Response> send_spec(const std::string& cpu_name,
+                                    const std::string& gpu_name);
+  std::optional<Response> set_temperature_unit(const std::string& unit);
 
  private:
   std::string port_;
