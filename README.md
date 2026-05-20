@@ -126,6 +126,7 @@ The device requires periodic keepalive (~60s timeout) or it reverts to the defau
 | Arch Linux | 6.17.9 | Intel Core Ultra 9 285K | NVIDIA RTX 5080 | [@fadli0029](https://github.com/fadli0029) |
 | Bazzite | 6.17.7 | AMD Ryzen 7 9800X3D | Radeon RX 9070XT | [@CRE82DV8](https://github.com/CRE82DV8) |
 | CachyOS | 6.19.8-1-cachyos | AMD Ryzen 9 9950X3D | AMD Radeon RX 9070 XT | [@nerddotdad](https://github.com/nerddotdad) |
+| Linux Mint | 6.17.0-29-generic | AMD Ryzen 9 9950X3D | AMD Radeon RX 9070 XT | [@chuiden](https://github.com/chuiden) |
 
 If you've tested on a different system, feel free to add yours via PR.
 
