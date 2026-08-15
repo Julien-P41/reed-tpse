@@ -39,4 +39,36 @@ install(TARGETS reed
     LIBRARY DESTINATION lib
 )
 install(DIRECTORY include/reed DESTINATION include)
-install(FILES systemd/reed-tpse.service DESTINATION lib/systemd/user)
+
+# The daemon holds /dev/ttyACM0 exclusively, so exactly one scope may be
+# installed. Default is "none": `make install` never silently enables a daemon.
+set(REED_SYSTEMD_SCOPE "none" CACHE STRING
+    "Which systemd unit to install: system, user, or none")
+set_property(CACHE REED_SYSTEMD_SCOPE PROPERTY STRINGS system user none)
+
+if(REED_SYSTEMD_SCOPE STREQUAL "user")
+    install(FILES systemd/user/reed-tpse.service DESTINATION lib/systemd/user)
+elseif(REED_SYSTEMD_SCOPE STREQUAL "system")
+    if(NOT REED_SERVICE_USER)
+        # `sudo make install` would otherwise bake in "root".
+        if(DEFINED ENV{SUDO_USER})
+            set(REED_SERVICE_USER "$ENV{SUDO_USER}")
+        else()
+            set(REED_SERVICE_USER "$ENV{USER}")
+        endif()
+    endif()
+    if(NOT REED_SERVICE_USER)
+        message(FATAL_ERROR
+            "REED_SYSTEMD_SCOPE=system needs an account to run as. "
+            "Pass -DREED_SERVICE_USER=<name>.")
+    endif()
+    message(STATUS "System-scope unit will run as user: ${REED_SERVICE_USER}")
+    configure_file(systemd/system/reed-tpse.service.in
+                   ${CMAKE_CURRENT_BINARY_DIR}/reed-tpse.service @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/reed-tpse.service
+            DESTINATION lib/systemd/system)
+elseif(NOT REED_SYSTEMD_SCOPE STREQUAL "none")
+    message(FATAL_ERROR
+        "REED_SYSTEMD_SCOPE must be one of: system, user, none "
+        "(got '${REED_SYSTEMD_SCOPE}')")
+endif()

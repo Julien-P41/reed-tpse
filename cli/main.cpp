@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstring>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <thread>
 
@@ -27,6 +28,10 @@ static void print_usage(const char* prog) {
       << " <command> [options]\n\n"
          "Commands:\n"
          "  info                    Show device info\n"
+         "  status                  Show fan/pump RPM, warnings, storage\n"
+         "  raw <METHOD> <ENDPOINT> [JSON]\n"
+         "                          Send an arbitrary command, print the "
+         "response\n"
          "  upload <file>           Upload media file (converts GIF to MP4)\n"
          "  display <file...>       Set display to specified media files\n"
          "  brightness <0-100>      Set display brightness\n"
@@ -42,7 +47,10 @@ static void print_usage(const char* prog) {
          "  --ratio <2:1|1:1>       Display ratio (default: 2:1)\n"
          "  --brightness <0-100>    Set brightness with display command\n"
          "  --keepalive             Stay running with keepalive (default: exit)\n"
-         "  --foreground            Run daemon in foreground\n";
+         "  --foreground            Run daemon in foreground\n"
+         "  --json                  Machine-readable output (status)\n"
+         "  --watch <seconds>       Poll until interrupted (status)\n"
+         "  --system                Act on the system-scope unit (daemon)\n";
 }
 
 static int cmd_info(const std::string& port, bool verbose) {
@@ -74,6 +82,141 @@ static int cmd_info(const std::string& port, bool verbose) {
       std::cout << info->attributes[i];
     }
     std::cout << "\n";
+  }
+
+  return 0;
+}
+
+static void print_status(const reed::DeviceStatus& status) {
+  const double gib = status.available_storage / (1024.0 * 1024.0 * 1024.0);
+
+  std::cout << "Fan LCD:   " << (status.fan_lcd.empty() ? "-" : status.fan_lcd)
+            << " RPM\n"
+            << "Pump:      "
+            << (status.turbo_pump.empty() ? "-" : status.turbo_pump)
+            << " RPM\n";
+
+  std::cout << "Storage:   " << std::fixed << std::setprecision(2) << gib
+            << " GiB free\n";
+
+  if (status.warnings.empty()) {
+    std::cout << "Warnings:  (none reported)\n";
+    return;
+  }
+
+  for (size_t i = 0; i < status.warnings.size(); ++i) {
+    std::cout << (i == 0 ? "Warnings:  " : "           ")
+              << status.warnings[i].type << ": "
+              << status.warnings[i].description << "\n";
+  }
+}
+
+static int cmd_status(const std::string& port, bool json_output, int watch,
+                      bool verbose) {
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+
+  // No handshake here: `POST conn` triggers a full screen re-initialisation
+  // on the device (~2s), which a read-only poll has no business causing.
+  device.drain();
+
+  if (watch > 0) {
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+  }
+
+  bool healthy = true;
+
+  while (g_running) {
+    auto status = device.get_status();
+    if (!status) {
+      std::cerr << "No response to 'STATE all'\n";
+      return 1;
+    }
+
+    healthy = status->healthy();
+
+    if (json_output) {
+      picojson::object warnings_obj;
+      picojson::array warnings;
+      for (const auto& w : status->warnings) {
+        picojson::object entry;
+        entry["description"] = picojson::value(w.description);
+        entry["type"] = picojson::value(w.type);
+        warnings.push_back(picojson::value(entry));
+      }
+
+      picojson::object out;
+      out["fanLCD"] = picojson::value(status->fan_lcd);
+      out["turboPump"] = picojson::value(status->turbo_pump);
+      out["availableStorage"] = picojson::value(status->available_storage);
+      out["warning"] = picojson::value(warnings);
+      out["healthy"] = picojson::value(healthy);
+
+      std::cout << picojson::value(out).serialize() << std::endl;
+    } else {
+      print_status(*status);
+    }
+
+    if (watch <= 0) break;
+
+    if (!json_output) std::cout << "\n";
+    std::this_thread::sleep_for(std::chrono::seconds(watch));
+  }
+
+  return healthy ? 0 : 2;
+}
+
+static int cmd_raw(const std::string& port, const std::string& method,
+                   const std::string& endpoint, const std::string& body,
+                   bool verbose) {
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+
+  device.drain();
+
+  auto response = device.send_command(method, endpoint, body);
+  if (!response) {
+    std::cerr << "No response to '" << method << " " << endpoint << "'\n";
+    return 1;
+  }
+
+  std::cout << "Status:  " << response->version << " " << response->status
+            << "\n";
+
+  const size_t separator = response->raw.find("\r\n\r\n");
+  if (separator != std::string::npos) {
+    std::string headers = response->raw.substr(0, separator);
+    // Headers are CRLF-separated; print one per line without the CRs.
+    size_t start = 0;
+    while (start < headers.size()) {
+      size_t end = headers.find("\r\n", start);
+      if (end == std::string::npos) end = headers.size();
+      std::cout << "Header:  " << headers.substr(start, end - start) << "\n";
+      start = end + 2;
+    }
+  }
+
+  if (response->body.empty()) {
+    // An empty body with 200 means the endpoint took no action. It is not an
+    // error, and it is not proof of success either.
+    std::cout << "Body:    (empty -- the endpoint accepted the frame but "
+                 "returned nothing)\n";
+    return 0;
+  }
+
+  std::cout << "Body:    " << response->body << "\n";
+
+  if (response->json) {
+    std::cout << "JSON:    " << response->json->serialize(true) << "\n";
+  } else {
+    std::cout << "JSON:    (body is not valid JSON)\n";
   }
 
   return 0;
@@ -276,20 +419,30 @@ static int cmd_delete(const std::vector<std::string>& files) {
   return 0;
 }
 
+// The unit ships in two mutually exclusive scopes; never address both, or two
+// daemons end up contending for the same serial port.
+static std::string systemctl(bool system_scope) {
+  return system_scope ? "systemctl" : "systemctl --user";
+}
+
 static int cmd_daemon_start(const std::string& port, bool foreground,
-                            bool verbose) {
+                            bool system_scope, bool verbose) {
   if (!foreground) {
-    int ret =
-        std::system("systemctl --user enable reed-tpse.service 2>/dev/null");
-    ret = std::system("systemctl --user start reed-tpse.service 2>/dev/null");
+    const std::string sc = systemctl(system_scope);
+    std::system((sc + " enable reed-tpse.service 2>/dev/null").c_str());
+    int ret = std::system((sc + " start reed-tpse.service 2>/dev/null").c_str());
 
     if (ret == 0) {
-      std::cout << "Daemon started via systemd.\n";
-      std::cout << "Check status: reed-tpse daemon status\n";
+      std::cout << "Daemon started via systemd ("
+                << (system_scope ? "system" : "user") << " scope).\n";
+      std::cout << "Check status: reed-tpse daemon status"
+                << (system_scope ? " --system" : "") << "\n";
       return 0;
     } else {
-      std::cerr << "systemd service not installed. Run with --foreground or "
-                   "install service.\n";
+      std::cerr << "systemd service not installed in "
+                << (system_scope ? "system" : "user")
+                << " scope. Run with --foreground, install the unit, or try "
+                << (system_scope ? "without --system" : "--system") << ".\n";
       return 1;
     }
   }
@@ -338,8 +491,10 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   return 0;
 }
 
-static int cmd_daemon_stop() {
-  int ret = std::system("systemctl --user stop reed-tpse.service 2>/dev/null");
+static int cmd_daemon_stop(bool system_scope) {
+  int ret = std::system(
+      (systemctl(system_scope) + " stop reed-tpse.service 2>/dev/null")
+          .c_str());
   if (ret == 0) {
     std::cout << "Daemon stopped.\n";
     return 0;
@@ -349,9 +504,10 @@ static int cmd_daemon_stop() {
   }
 }
 
-static int cmd_daemon_status() {
-  int ret =
-      std::system("systemctl --user status reed-tpse.service 2>/dev/null");
+static int cmd_daemon_status(bool system_scope) {
+  int ret = std::system(
+      (systemctl(system_scope) + " status reed-tpse.service 2>/dev/null")
+          .c_str());
   return ret == 0 ? 0 : 1;
 }
 
@@ -372,6 +528,9 @@ int main(int argc, char* argv[]) {
   int brightness = config.brightness;
   bool keepalive = false;
   bool foreground = false;
+  bool json_output = false;
+  bool system_scope = false;
+  int watch = 0;
   int keepalive_interval = config.keepalive_interval;
 
   std::string command;
@@ -394,6 +553,12 @@ int main(int argc, char* argv[]) {
       keepalive = true;
     } else if (arg == "--foreground") {
       foreground = true;
+    } else if (arg == "--json") {
+      json_output = true;
+    } else if (arg == "--system") {
+      system_scope = true;
+    } else if (arg == "--watch") {
+      if (++i < argc) watch = std::atoi(argv[i]);
     } else if (arg == "-h" || arg == "--help") {
       print_usage(argv[0]);
       return 0;
@@ -411,7 +576,8 @@ int main(int argc, char* argv[]) {
 
   // Auto-detect port for commands that need serial connection
   bool needs_serial = (command == "info" || command == "display" ||
-                       command == "brightness" || command == "daemon");
+                       command == "brightness" || command == "daemon" ||
+                       command == "status" || command == "raw");
   if (needs_serial && port.empty()) {
     if (verbose) {
       std::cout << "Auto-detecting device...\n";
@@ -424,12 +590,26 @@ int main(int argc, char* argv[]) {
     }
     port = *detected;
     if (!verbose) {
-      std::cout << "Found device at " << port << "\n";
+      // Keep this on stdout, where downstream consumers already parse it for
+      // the port (e.g. koconnorgit/tryx-panorama's GUI), but move it aside
+      // for --json so that output stays machine-readable.
+      (json_output ? std::cerr : std::cout) << "Found device at " << port
+                                            << "\n";
     }
   }
 
   if (command == "info") {
     return cmd_info(port, verbose);
+  } else if (command == "status") {
+    return cmd_status(port, json_output, watch, verbose);
+  } else if (command == "raw") {
+    if (args.size() < 2) {
+      std::cerr << "Usage: reed-tpse raw <METHOD> <ENDPOINT> [JSON]\n"
+                   "       METHOD is POST (write) or STATE (read).\n";
+      return 1;
+    }
+    return cmd_raw(port, args[0], args[1], args.size() > 2 ? args[2] : "",
+                   verbose);
   } else if (command == "upload") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse upload <file>\n";
@@ -463,11 +643,11 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     if (args[0] == "start") {
-      return cmd_daemon_start(port, foreground, verbose);
+      return cmd_daemon_start(port, foreground, system_scope, verbose);
     } else if (args[0] == "stop") {
-      return cmd_daemon_stop();
+      return cmd_daemon_stop(system_scope);
     } else if (args[0] == "status") {
-      return cmd_daemon_status();
+      return cmd_daemon_status(system_scope);
     } else {
       std::cerr << "Unknown daemon command: " << args[0] << "\n";
       return 1;

@@ -1,0 +1,31 @@
+# System-scope unit. Runs at boot, independent of any login session -- use
+# this for headless machines or when boot/shutdown sequences also drive the
+# display.
+#
+# MUTUALLY EXCLUSIVE with systemd/user/reed-tpse.service. Only one instance
+# may hold /dev/ttyACM0 -- two readers on the same tty split incoming frames
+# between them at random, which shows up as commands intermittently returning
+# empty responses. Enable this one OR the user one, never both.
+#
+# Do NOT symlink one unit file into both scopes: a single file installed in
+# both places can legitimately be enabled and started twice.
+#
+#   sudo systemctl enable --now reed-tpse.service
+#
+# User= must own the config and state files under its own home, and must be in
+# the serial group (uucp on Arch, dialout on Debian/Ubuntu).
+
+[Unit]
+Description=Tryx Panorama SE AIO Display Controller for Linux Distros
+Documentation=https://github.com/fadli0029/reed-tpse
+After=local-fs.target
+
+[Service]
+Type=simple
+User=@REED_SERVICE_USER@
+ExecStart=@CMAKE_INSTALL_PREFIX@/bin/reed-tpse daemon start --foreground
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

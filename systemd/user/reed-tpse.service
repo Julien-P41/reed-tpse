@@ -1,0 +1,22 @@
+# User-scope unit. Runs for one logged-in session.
+#
+# MUTUALLY EXCLUSIVE with systemd/system/reed-tpse.service. Only one instance
+# may hold /dev/ttyACM0 -- two readers on the same tty split incoming frames
+# between them at random, which shows up as commands intermittently returning
+# empty responses. Enable this one OR the system one, never both.
+#
+#   systemctl --user enable --now reed-tpse.service
+
+[Unit]
+Description=Tryx Panorama SE AIO Display Controller for Linux Distros
+Documentation=https://github.com/fadli0029/reed-tpse
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/reed-tpse daemon start --foreground
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

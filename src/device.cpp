@@ -2,6 +2,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <thread>
@@ -42,6 +44,57 @@ const picojson::value& get_value(const picojson::value& v,
 }
 
 }  // namespace
+
+bool DeviceStatus::healthy() const {
+  for (const auto& w : warnings) {
+    if (w.description != "No ERROR") return false;
+  }
+  return true;
+}
+
+std::optional<PortHolder> find_port_holder(const std::string& port) {
+  namespace fs = std::filesystem;
+
+  std::error_code ec;
+  fs::path target = fs::canonical(port, ec);
+  if (ec) target = port;
+
+  const int self = getpid();
+
+  for (const auto& proc : fs::directory_iterator("/proc", ec)) {
+    if (ec) break;
+
+    const std::string name = proc.path().filename().string();
+    if (name.empty() || !std::all_of(name.begin(), name.end(), ::isdigit)) {
+      continue;
+    }
+
+    const int pid = std::atoi(name.c_str());
+    if (pid == self) continue;
+
+    // Unreadable for other users' processes unless root; skip those quietly.
+    std::error_code iter_ec;
+    fs::directory_iterator fds(proc.path() / "fd", iter_ec);
+    if (iter_ec) continue;
+
+    for (const auto& fd : fds) {
+      std::error_code link_ec;
+      fs::path link = fs::read_symlink(fd.path(), link_ec);
+      if (link_ec || link != target) continue;
+
+      PortHolder holder;
+      holder.pid = pid;
+
+      std::ifstream comm((proc.path() / "comm").string());
+      if (comm) std::getline(comm, holder.comm);
+      if (holder.comm.empty()) holder.comm = "unknown";
+
+      return holder;
+    }
+  }
+
+  return std::nullopt;
+}
 
 std::optional<std::string> Device::find_device(bool verbose) {
   namespace fs = std::filesystem;
@@ -110,11 +163,32 @@ Device::~Device() {
 bool Device::connect() {
   fd_ = open(port_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (fd_ < 0) {
-    if (verbose_) {
+    // EBUSY means another instance holds the port exclusively (see TIOCEXCL
+    // below). Two readers on one tty split incoming frames between them at
+    // random, so name the holder rather than failing with a bare errno.
+    if (errno == EBUSY) {
+      std::cerr << "Error: " << port_ << " is already open";
+      if (auto holder = find_port_holder(port_)) {
+        std::cerr << " by PID " << holder->pid << " (" << holder->comm << ")";
+      }
+      std::cerr << ".\n"
+                << "       Only one instance may hold the device. Stop it "
+                   "with one of:\n"
+                << "         systemctl --user stop reed-tpse.service\n"
+                << "         sudo systemctl stop reed-tpse.service\n";
+    } else if (verbose_) {
       std::cerr << "Failed to open " << port_ << ": " << strerror(errno)
                 << "\n";
     }
     return false;
+  }
+
+  // Make further open() calls on this tty fail with EBUSY for non-root.
+  // Non-fatal: an older kernel or an unusual tty driver may refuse it, and
+  // losing the lock is worse than losing the session.
+  if (ioctl(fd_, TIOCEXCL) < 0 && verbose_) {
+    std::cerr << "Warning: TIOCEXCL failed on " << port_ << ": "
+              << strerror(errno) << "\n";
   }
 
   struct termios tty;
@@ -171,6 +245,16 @@ void Device::disconnect() {
   if (fd_ >= 0) {
     close(fd_);
     fd_ = -1;
+  }
+}
+
+void Device::drain(int timeout_ms) {
+  if (fd_ < 0) return;
+
+  auto discarded = read_response(timeout_ms);
+  if (verbose_ && !discarded.empty()) {
+    std::cout << "Drained " << discarded.size()
+              << " unprompted byte(s) from " << port_ << "\n";
   }
 }
 
@@ -276,6 +360,51 @@ std::optional<Response> Device::send_command(const std::string& request_state,
   }
 
   return parsed;
+}
+
+std::optional<Response> Device::query(const std::string& cmd_type,
+                                      const std::string& content) {
+  return send_command("STATE", cmd_type, content);
+}
+
+std::optional<DeviceStatus> Device::get_status() {
+  auto response = query("all");
+
+  if (!response || !response->json) {
+    return std::nullopt;
+  }
+
+  DeviceStatus status;
+  const auto& j = *response->json;
+
+  if (has_key(j, "status")) {
+    const auto& s = get_value(j, "status");
+    status.fan_lcd = get_string(s, "fanLCD");
+    status.turbo_pump = get_string(s, "turboPump");
+  }
+
+  if (has_key(j, "availableStorage")) {
+    const auto& v = get_value(j, "availableStorage");
+    if (v.is<double>()) status.available_storage = v.get<double>();
+  }
+
+  // `warning` is a JSON *string* containing a JSON array, so it needs a
+  // second parse pass.
+  const std::string warning_raw = get_string(j, "warning");
+  if (!warning_raw.empty()) {
+    picojson::value warnings;
+    if (picojson::parse(warnings, warning_raw).empty() &&
+        warnings.is<picojson::array>()) {
+      for (const auto& entry : warnings.get<picojson::array>()) {
+        Warning w;
+        w.description = get_string(entry, "description");
+        w.type = get_string(entry, "type");
+        status.warnings.push_back(w);
+      }
+    }
+  }
+
+  return status;
 }
 
 std::optional<DeviceInfo> Device::handshake() {

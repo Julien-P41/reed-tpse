@@ -8,8 +8,11 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 
 - Upload images, videos, and GIFs (auto-converts to MP4)
 - Set display content and brightness
+- Read device status: fan/pump RPM, health warnings, free storage
+- Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
-- systemd user service for persistent display across reboots
+- systemd service (user or system scope) for persistent display across reboots
+- Exclusive port locking, so a second instance can't corrupt the first's replies
 - Auto-detects device (scans /dev/ttyACM*)
 - Minimal dependencies (picojson header-only)
 
@@ -18,11 +21,18 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - [ ] CPU stats overlay (temperature, usage, clock speed)
 - [ ] GPU stats (temperature, usage, VRAM, clock speed)
 - [ ] RAM usage
-- [ ] Fan/pump RPM display
+- [x] Fan/pump RPM display — `reed-tpse status`
 - [ ] Network throughput
 - [ ] Custom overlay layouts
+- [ ] Fan curve / pump control (`fanLCDSet`, `turboPump`)
+- [ ] Screen behaviour: `displayInSleep`, `rotate`, `waterfallMode`, `power`
 
-I believe the stats features bove (like CPU stats) should not be too difficult, but I think the image generation (given stats, how do we generate images dynamically with stats rendered on them?) part will be quite challenging. Hopefully the team at Tryx release a Linux Kanali build before we have to implement these features lol.
+**Good news on the stats overlays:** they do not need host-side image
+generation. The device renders them itself — the screen config object already
+carries a `sysinfoDisplay` array and a `settings{position,color,align,badges}`
+block (both currently sent empty), and the item names are plain strings such as
+`CPU Temperature`, `GPU Usage`, `Memory Utilization`, `Date&Time`, with
+`CPU Badge`/`GPU Badge` for the badges. The host only has to push values.
 
 ## Requirements
 
@@ -48,6 +58,40 @@ make
 sudo make install
 ```
 
+### Installing the systemd unit
+
+`make install` deliberately installs **no** unit by default, so it never
+silently enables a daemon. Pick exactly one scope:
+
+```bash
+cmake .. -DREED_SYSTEMD_SCOPE=user      # session-scoped, WantedBy=default.target
+cmake .. -DREED_SYSTEMD_SCOPE=system    # boot-scoped,  WantedBy=multi-user.target
+```
+
+The two are **mutually exclusive**. The daemon holds `/dev/ttyACM0`
+exclusively, and two readers on one tty split incoming frames between them at
+random — commands start returning empty or mismatched responses. Do not
+symlink one unit file into both scopes; a single file installed in both places
+can legitimately be enabled and started twice.
+
+The system unit runs as a named account (defaults to `$SUDO_USER`, else
+`$USER`; override with `-DREED_SERVICE_USER=<name>`). That account needs to be
+in the serial group and owns the config/state files.
+
+If a second instance does start, it now fails immediately and names the holder:
+
+```
+Error: /dev/ttyACM0 is already open by PID 4898 (reed-tpse).
+       Only one instance may hold the device. Stop it with one of:
+         systemctl --user stop reed-tpse.service
+         sudo systemctl stop reed-tpse.service
+```
+
+⚠ If you have a boot or shutdown script that wraps `reed-tpse` in a
+`Type=oneshot` unit and sleeps for the length of a video, set
+`TimeoutStartSec` above that sleep — systemd's default is 90s and will
+otherwise kill the script partway through.
+
 ## Usage
 
 ```bash
@@ -66,6 +110,9 @@ reed-tpse daemon start
 
 ```bash
 reed-tpse info                   # Show device info
+reed-tpse status                 # Fan/pump RPM, warnings, free storage
+reed-tpse raw <METHOD> <ENDPOINT> [JSON]
+                                 # Send any command, print the response
 reed-tpse upload <file>          # Upload media file
 reed-tpse display <file>         # Set display content
 reed-tpse brightness <0-100>     # Adjust brightness
@@ -74,6 +121,56 @@ reed-tpse delete <file>          # Delete file from device
 reed-tpse daemon start           # Start background keepalive
 reed-tpse daemon stop            # Stop daemon
 reed-tpse daemon status          # Check daemon status
+```
+
+Add `--system` to any `daemon` subcommand to address the system-scope unit
+instead of the user-scope one.
+
+### Status
+
+```bash
+reed-tpse status                 # human-readable table
+reed-tpse status --json          # one JSON object on stdout, for scripting
+reed-tpse status --watch 5       # poll every 5s until interrupted
+```
+
+```
+Fan LCD:   4170 RPM
+Pump:      2910 RPM
+Storage:   2.65 GiB free
+Warnings:  Fan LCD: No ERROR
+```
+
+Exit code is `2` if the device reports any warning whose description is not
+`No ERROR`, so it drops straight into a monitoring check. `status` does not
+send `conn`, so it will not disturb what is on screen.
+
+### Raw passthrough
+
+The protocol has two methods: `POST` writes, `STATE` reads. (There is no
+`GET` — the firmware ignores it.) `raw` sends either one to any endpoint,
+which makes undiscovered endpoints reachable without a code change:
+
+```bash
+reed-tpse raw STATE all                        # the only read that returns a body
+reed-tpse raw POST conn                        # same data as `reed-tpse info`
+reed-tpse raw POST brightness '{"value":60}'
+reed-tpse raw POST displayInSleep '{"enable":true}' -v   # -v prints frame hex
+```
+
+⚠ **An empty body with status 200 means the endpoint took no action.** It is
+not an error, and it is not proof of success — `raw` says so explicitly rather
+than reporting success. Endpoints that control cooling hardware
+(`fanLCDSet`, `turboPump`) should be read before they are written; verify any
+write by re-reading `STATE all` and checking that the value actually moved.
+
+Endpoints seen in the vendor application's own dispatcher:
+
+```
+conn · disconn · all · status · spec · brightness · waterBlockScreen
+waterBlockScreenId · rotate · recovery · preset · sysinfoDisplay
+displayInSleep · waterfallMode · fanLCDSet · turboPump · mediaDelete
+power · reboot
 ```
 
 ## Configuration
@@ -104,7 +201,9 @@ reed-tpse/
 │   └── config.hpp     # XDG config/state management
 ├── src/               # Library implementation
 ├── cli/               # CLI frontend
-└── systemd/           # systemd user service
+└── systemd/
+    ├── user/          # session-scope unit
+    └── system/        # boot-scope unit template (configured by CMake)
 ```
 
 The core functionality is in `libreed.a`. The CLI links against it. Future GUI (maybe in v2.0.0?) will also link against the same library.
@@ -118,6 +217,26 @@ The Tryx Panorama SE exposes:
 2. **ADB**: Android Debug Bridge for file transfer to `/sdcard/pcMedia/`
 
 The device requires periodic keepalive (~60s timeout) or it reverts to the default screen. The daemon runs in the background (~1MB RAM, negligible CPU, I bet you could run this on a potato and not notice it) and handles this automatically.
+
+The wire format is essentially HTTP-over-serial carrying JSON, at 115200 8N1:
+
+```
+0x5A │ escape( LEN_HI LEN_LO
+                "<METHOD> <ENDPOINT> <VERSION>\r\n"
+                "ContentType=json\r\n"
+                "ContentLength=<n>\r\n"
+                "AckNumber=<seq>\r\n"
+                "\r\n" <json body>
+                CRC ) │ 0x5A
+
+LEN    = len(message) + 5   (uint16, big-endian)
+CRC    = sum(LEN bytes + message bytes) & 0xFF
+escape = 0x5A -> 0x5B 0x01 ,  0x5B -> 0x5B 0x02
+```
+
+Opening the port asserts DTR and the device replies with an unprompted info
+frame, so the first read after connecting has to be drained or it is mistaken
+for the answer to the first command.
 
 ## Tested on
 
