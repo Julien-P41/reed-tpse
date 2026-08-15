@@ -65,7 +65,7 @@ static void print_usage(const char* prog) {
          "                          CPU Voltage, GPU Temperature, GPU Frequency,\n"
          "                          GPU Usage, GPU Voltage, Motherboard Temperature,\n"
          "                          Memory Frequency, Memory Utilization,\n"
-         "                          Hard Disk Temperature, Date & Time\n"
+         "                          Hard Disk Temperature, Date&Time\n"
          "  --position <pos>        Top | Center | Bottom (default: Top)\n"
          "  --align <align>         Left | Center | Right (default: Left)\n"
          "  --color <hex>           e.g. #FFFFFF (default: #FFFFFF)\n"
@@ -80,15 +80,29 @@ namespace {
 
 // Firmware-defined label set. Anything outside this is rejected with a clear
 // error so typos don't silently produce a dead overlay slot.
+// Labels are passed through to the firmware verbatim, so they must match its
+// vocabulary exactly. The date label is "Date&Time" -- unspaced. The spaced
+// "Date & Time" is the vendor app's *UI* string (it sits in the renderer i18n
+// next to the French "Date et heure"); the unspaced form is what the vendor's
+// main process puts on the wire. Verified on firmware V1.0.11: "Date&Time"
+// renders the clock, "Date & Time" is silently dropped while the other
+// metrics in the same request still render.
 const std::set<std::string>& known_hud_labels() {
   static const std::set<std::string> labels = {
       "CPU Temperature",         "CPU Frequency",       "CPU Usage",
       "CPU Voltage",             "GPU Temperature",     "GPU Frequency",
       "GPU Usage",               "GPU Voltage",         "Motherboard Temperature",
       "Memory Frequency",        "Memory Utilization",  "Hard Disk Temperature",
-      "Date & Time",
+      "Date&Time",
   };
   return labels;
+}
+
+// Accept the human-readable spelling people will reasonably type (and that
+// downstream GUIs already send) but put the firmware's spelling on the wire.
+std::string canonical_hud_label(const std::string& label) {
+  if (label == "Date & Time" || label == "Date and Time") return "Date&Time";
+  return label;
 }
 
 std::vector<std::string> split_csv(const std::string& s) {
@@ -778,6 +792,7 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
     };
     if (a == "--metrics") {
       h.metrics = split_csv(next("--metrics"));
+      for (auto& m : h.metrics) m = canonical_hud_label(m);
       metrics_provided = true;
     } else if (a == "--position") {
       h.position = next("--position");
