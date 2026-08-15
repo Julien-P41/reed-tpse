@@ -308,8 +308,14 @@ for the answer to the first command.
 | Arch Linux | 6.17.9 | Intel Core Ultra 9 285K | NVIDIA RTX 5080 | [@fadli0029](https://github.com/fadli0029) |
 | Bazzite | 6.17.7 | AMD Ryzen 7 9800X3D | Radeon RX 9070XT | [@CRE82DV8](https://github.com/CRE82DV8) |
 | CachyOS | 6.19.8-1-cachyos | AMD Ryzen 9 9950X3D | AMD Radeon RX 9070 XT | [@nerddotdad](https://github.com/nerddotdad) |
+| Ubuntu 24.04.4 LTS | 7.0.0-28-generic | Intel Core i9-13900K | NVIDIA RTX 4090 | [@Julien-P41](https://github.com/Julien-P41) |
 
 If you've tested on a different system, feel free to add yours via PR.
+
+The Ubuntu entry above is a Tryx Panorama 360 ARGB (firmware V1.0.11, hardware
+V1.1, `productId` `cm01`) — the same controller board as the SE, so the
+protocol is identical. `status`, `raw`, and the `hud` overlay are all verified
+on it.
 
 ## License
 
