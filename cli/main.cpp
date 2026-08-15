@@ -626,6 +626,12 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       std::cerr << "keepalive: reconnected on " << device->port() << "\n";
       return true;
     }
+    // Release the port before scanning. connect() may have succeeded above
+    // with only restore() failing, in which case we still hold the tty --
+    // and TIOCEXCL makes find_device()'s open() of our own port fail with
+    // EBUSY, so the rescan could never find the device it is sitting on.
+    device->disconnect();
+
     std::cerr << "keepalive: scanning for device...\n";
     auto found = reed::Device::find_device(verbose);
     if (!found) {
