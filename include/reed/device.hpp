@@ -116,6 +116,12 @@ class Device {
                                     const std::string& gpu_name);
   std::optional<Response> set_temperature_unit(const std::string& unit);
 
+  // Sleep-mode behaviour. Enabled, the panel goes black once the host stops
+  // handshaking (PC off, or the controlling process exits) instead of falling
+  // back to the firmware's demo loop. Verified on firmware V1.0.11; the field
+  // is `enable` and a `value` field is silently ignored.
+  std::optional<Response> set_display_in_sleep(bool enable);
+
  private:
   std::string port_;
   bool verbose_;

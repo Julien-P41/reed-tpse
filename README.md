@@ -13,6 +13,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - Upload images, videos, and GIFs (auto-converts to MP4)
 - Set display content and brightness
 - Read device status: fan/pump RPM, health warnings, free storage
+- Black screen instead of the demo loop when the host is off (`sleep-display`)
 - Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
 - On-device system telemetry overlay (CPU/GPU temp, usage, frequency, voltage; RAM utilization; motherboard/disk temps; date & time)
@@ -31,7 +32,8 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - [ ] Network throughput
 - [ ] Screen Splitting mode support (6-metric layout)
 - [ ] Fan curve / pump control (`fanLCDSet`, `turboPump`)
-- [ ] Screen behaviour: `displayInSleep`, `rotate`, `waterfallMode`, `power`
+- [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
+- [ ] Screen behaviour: `rotate`, `screenFlip`, `waterfallMode`, `power`
 
 The stats overlays never needed host-side image generation: the device renders
 them itself. The screen config object carries a `sysinfoDisplay` array and a
@@ -150,6 +152,39 @@ Warnings:  Fan LCD: No ERROR
 Exit code is `2` if the device reports any warning whose description is not
 `No ERROR`, so it drops straight into a monitoring check. `status` does not
 send `conn`, so it will not disturb what is on screen.
+
+### Sleep display
+
+```bash
+reed-tpse sleep-display on     # panel goes black when the host stops handshaking
+reed-tpse sleep-display off    # panel falls back to the firmware's sleep animation
+```
+
+The device reverts to firmware-drawn content ~60s after the last handshake --
+when the PC powers off, or whenever no process is holding the connection.
+`sleep-display on` makes that fallback a black screen instead of the sleep
+animation.
+
+Verified on firmware V1.0.11 by measuring the panel's mean luminance over adb
+`screencap`, 150s after the last handshake:
+
+| `displayInSleep` | Panel |
+|---|---|
+| `{"enable":true}`  | black (luminance 0) |
+| `{"enable":false}` | sleep animation (luminance ~58-63) |
+| `{"value":true}`   | silently ignored -- behaves as disabled |
+
+So the payload field is `enable`; `value` is not read. Note the endpoint
+returns `200` with an empty body for *any* payload, including a nonsense
+endpoint name, so the reply proves nothing -- only the panel does.
+
+⚠ Taking a `screencap` wakes the panel out of the black state for a few
+seconds. If you are measuring this, sample once after a long undisturbed wait
+rather than polling, or the wake-ups look like the setting not working.
+
+The setting lives in controller RAM and is lost whenever USB power drops (which
+it does at S5), so `sleep-display` persists it to the state file and the daemon
+re-applies it on every connect.
 
 ### Raw passthrough
 

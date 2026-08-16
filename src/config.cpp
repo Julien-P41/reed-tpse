@@ -184,6 +184,10 @@ std::optional<DisplayState> ConfigManager::load_state() {
   state.screen_mode = get_string(json, "screen_mode", state.screen_mode);
   state.play_mode = get_string(json, "play_mode", state.play_mode);
   state.brightness = get_int(json, "brightness", state.brightness);
+  if (json.is<picojson::object>() &&
+      json.get<picojson::object>().count("display_in_sleep")) {
+    state.display_in_sleep = get_bool(json, "display_in_sleep", false);
+  }
 
   const auto& hud_val = get_value(json, "hud");
   if (hud_val.is<picojson::object>()) {
@@ -226,6 +230,10 @@ bool ConfigManager::save_state(const DisplayState& state) {
   obj["screen_mode"] = picojson::value(state.screen_mode);
   obj["play_mode"] = picojson::value(state.play_mode);
   obj["brightness"] = picojson::value(static_cast<double>(state.brightness));
+  // Written only once configured, so an untouched device is never overridden.
+  if (state.display_in_sleep) {
+    obj["display_in_sleep"] = picojson::value(*state.display_in_sleep);
+  }
 
   picojson::array hud_metrics_arr;
   for (const auto& m : state.hud.metrics) {

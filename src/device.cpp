@@ -620,6 +620,13 @@ std::optional<Response> Device::send_spec(const std::string& cpu_name,
   return send_command("POST", "spec", content);
 }
 
+std::optional<Response> Device::set_display_in_sleep(bool enable) {
+  picojson::object obj;
+  obj["enable"] = picojson::value(enable);
+  std::string content = picojson::value(obj).serialize();
+  return send_command("POST", "displayInSleep", content);
+}
+
 std::optional<Response> Device::set_temperature_unit(const std::string& unit) {
   picojson::object obj;
   obj["value"] = picojson::value(unit);  // "Celsius" or "Fahrenheit"

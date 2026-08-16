@@ -40,6 +40,8 @@ static void print_usage(const char* prog) {
          "  upload <file>           Upload media file (converts GIF to MP4)\n"
          "  display <file...>       Set display to specified media files\n"
          "  brightness <0-100>      Set display brightness\n"
+         "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
+         "                          stops handshaking\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
          "  daemon start            Start background daemon\n"
@@ -341,6 +343,50 @@ static int cmd_raw(const std::string& port, const std::string& method,
   return 0;
 }
 
+static int cmd_sleep_display(const std::string& port, const std::string& arg,
+                             bool verbose) {
+  bool enable;
+  if (arg == "on" || arg == "true" || arg == "1") {
+    enable = true;
+  } else if (arg == "off" || arg == "false" || arg == "0") {
+    enable = false;
+  } else {
+    std::cerr << "Usage: reed-tpse sleep-display <on|off>\n";
+    return 1;
+  }
+
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+  device.drain();
+
+  if (!device.set_display_in_sleep(enable)) {
+    std::cerr << "No response to 'POST displayInSleep'\n";
+    return 1;
+  }
+
+  // The device answers 200 with an empty body either way, so the reply proves
+  // nothing. Persist it instead and let the daemon re-apply, since the setting
+  // lives in controller RAM and is lost whenever USB power drops.
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->display_in_sleep = enable;
+  if (!reed::ConfigManager::save_state(*state)) {
+    std::cerr << "Warning: could not persist sleep-display state\n";
+  }
+
+  std::cout << "Sleep display " << (enable ? "enabled" : "disabled") << ".\n";
+  if (enable) {
+    std::cout << "  Panel goes black when the host stops handshaking.\n";
+  } else {
+    std::cout << "  Panel falls back to the firmware's demo loop when the "
+                 "host stops handshaking.\n";
+  }
+  return 0;
+}
+
 static int cmd_upload(const std::string& file, bool verbose) {
   if (verbose) std::cout << "Checking file: " << file << "\n";
 
@@ -637,6 +683,11 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     if (state->hud.enabled) {
       dev.send_spec(state->hud.cpu_name, state->hud.gpu_name);
       dev.set_temperature_unit(state->hud.temperature_unit);
+    }
+    // Volatile on the device -- controller RAM, lost whenever USB power drops
+    // (which it does at S5) -- so re-apply it on every connect, not just once.
+    if (state->display_in_sleep) {
+      dev.set_display_in_sleep(*state->display_in_sleep);
     }
     dev.set_screen_config(screen_config);
     dev.set_brightness(state->brightness);
@@ -1026,7 +1077,8 @@ int main(int argc, char* argv[]) {
   // port itself, since it is the one that actually needs the device.
   bool needs_serial = (command == "info" || command == "display" ||
                        command == "brightness" || command == "status" ||
-                       command == "raw" || command == "hud");
+                       command == "raw" || command == "hud" ||
+                       command == "sleep-display");
   bool serial_optional = (command == "hud");
   if (needs_serial && port.empty()) {
     if (verbose) {
@@ -1067,6 +1119,12 @@ int main(int argc, char* argv[]) {
     }
     return cmd_raw(port, args[0], args[1], args.size() > 2 ? args[2] : "",
                    verbose);
+  } else if (command == "sleep-display") {
+    if (args.empty()) {
+      std::cerr << "Usage: reed-tpse sleep-display <on|off>\n";
+      return 1;
+    }
+    return cmd_sleep_display(port, args[0], verbose);
   } else if (command == "upload") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse upload <file>\n";

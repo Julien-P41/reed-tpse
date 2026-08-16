@@ -32,6 +32,10 @@ struct DisplayState {
   std::string play_mode = "Single";
   int brightness = 75;  // default lower than max setting to reduce burn-in risk on the display
   HudConfig hud;
+  // Sleep-mode behaviour. Unset means "never configured, leave the device
+  // alone"; the setting is volatile on the device (it is lost whenever USB
+  // power is cut), so once set it has to be re-applied by the daemon.
+  std::optional<bool> display_in_sleep;
 };
 
 class ConfigManager {
