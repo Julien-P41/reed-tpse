@@ -121,6 +121,7 @@ reed-tpse raw <METHOD> <ENDPOINT> [JSON]
 reed-tpse upload <file>          # Upload media file
 reed-tpse display <file>         # Set display content
 reed-tpse brightness <0-100>     # Adjust brightness
+reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
 reed-tpse daemon start           # Start background keepalive
