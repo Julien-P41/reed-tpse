@@ -493,12 +493,16 @@ static int cmd_display(const std::string& port,
   std::cout << "\n";
   std::cout << "Brightness: " << brightness << "\n";
 
-  // Save state for daemon
-  reed::DisplayState state;
-  state.media = media_files;
-  state.ratio = ratio;
-  state.brightness = brightness;
-  reed::ConfigManager::save_state(state);
+  // Save state for daemon. Load first and mutate only the display fields:
+  // save_state() truncates, so building a fresh DisplayState here would drop
+  // every other setting sharing this file -- the HUD config, display_in_sleep,
+  // and any non-default screen/play mode -- on each `display` call.
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->media = media_files;
+  state->ratio = ratio;
+  state->brightness = brightness;
+  reed::ConfigManager::save_state(*state);
 
   if (!keepalive) {
     std::cout << "Run 'reed-tpse daemon start' to keep display persistent.\n";
