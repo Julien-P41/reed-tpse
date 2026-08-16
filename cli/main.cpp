@@ -579,6 +579,18 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       (config && !config->port.empty()) ? config->port : port;
   int keepalive_interval = config ? config->keepalive_interval : 10;
 
+  // Only the foreground daemon needs the device, so it does its own detection
+  // rather than making every `daemon` subcommand depend on a free port.
+  if (actual_port.empty()) {
+    auto detected = reed::Device::find_device(verbose);
+    if (!detected) {
+      std::cerr
+          << "No device found. Specify port with -p or check connection.\n";
+      return 1;
+    }
+    actual_port = *detected;
+  }
+
   reed::ScreenConfig screen_config;
   screen_config.media = state->media;
   screen_config.ratio = state->ratio;
@@ -1006,10 +1018,15 @@ int main(int argc, char* argv[]) {
 
   // Auto-detect port for commands that need serial connection. `hud` uses the
   // port if available but tolerates absence (state is still saved).
+  // `daemon` is deliberately absent: stop/status only talk to systemd, and
+  // start (without --foreground) does too. Probing the port here made
+  // `daemon stop` impossible while the daemon was running -- auto-detect
+  // opened the tty, hit the holder's TIOCEXCL, and bailed out with "No device
+  // found" before ever reaching systemctl. The --foreground path resolves the
+  // port itself, since it is the one that actually needs the device.
   bool needs_serial = (command == "info" || command == "display" ||
-                       command == "brightness" || command == "daemon" ||
-                       command == "status" || command == "raw" ||
-                       command == "hud");
+                       command == "brightness" || command == "status" ||
+                       command == "raw" || command == "hud");
   bool serial_optional = (command == "hud");
   if (needs_serial && port.empty()) {
     if (verbose) {
