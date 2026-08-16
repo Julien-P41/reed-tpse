@@ -36,6 +36,9 @@ struct DisplayState {
   // alone"; the setting is volatile on the device (it is lost whenever USB
   // power is cut), so once set it has to be re-applied by the daemon.
   std::optional<bool> display_in_sleep;
+  // Set when a firmware preset is showing. Mutually exclusive with `media`:
+  // the daemon re-applies whichever one is active.
+  std::optional<std::string> preset;
 };
 
 class ConfigManager {

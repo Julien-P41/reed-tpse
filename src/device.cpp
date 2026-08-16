@@ -633,6 +633,16 @@ std::optional<Response> Device::set_display_in_sleep(bool enable) {
   return send_command("POST", "displayInSleep", content);
 }
 
+std::optional<Response> Device::set_preset(const std::string& id) {
+  picojson::object obj;
+  obj["id"] = picojson::value(id);
+  std::string content = picojson::value(obj).serialize();
+  // Same double-send as set_screen_config: the first POST is unreliable.
+  send_command("POST", "waterBlockScreenId", content);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  return send_command("POST", "waterBlockScreenId", content);
+}
+
 std::optional<Response> Device::set_temperature_unit(const std::string& unit) {
   picojson::object obj;
   obj["value"] = picojson::value(unit);  // "Celsius" or "Fahrenheit"

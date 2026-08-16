@@ -42,6 +42,7 @@ static void print_usage(const char* prog) {
          "  brightness <0-100>      Set display brightness\n"
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
+         "  preset <name|list>      Show a firmware-bundled preset\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
          "  daemon start            Start background daemon\n"
@@ -435,6 +436,89 @@ static int cmd_sleep_display(const std::string& port, const std::string& arg,
   return 0;
 }
 
+// Presets are named by the file the firmware ships, e.g. "Cooling delivery"
+// for Cooling_delivery.mp4. Accept either spelling from the user.
+static std::string preset_display_name(const std::string& file_stem) {
+  std::string out = file_stem;
+  std::replace(out.begin(), out.end(), '_', ' ');
+  return out;
+}
+
+static int cmd_preset(const std::string& port, const std::vector<std::string>& args,
+                      bool verbose) {
+  if (!reed::Adb::is_device_connected()) {
+    std::cerr << "No ADB device connected (needed to list the built-in "
+                 "presets)\n";
+    return 1;
+  }
+  auto presets = reed::Adb::list_presets();
+  if (!presets || presets->empty()) {
+    std::cerr << "Could not read the preset list from the device\n";
+    return 1;
+  }
+
+  if (args.empty() || args[0] == "list") {
+    std::cout << "Built-in presets:\n";
+    for (const auto& p : *presets) {
+      std::cout << "  " << preset_display_name(p) << "\n";
+    }
+    return 0;
+  }
+
+  // Match on the display name, case-insensitively, and tolerate underscores.
+  const std::string wanted = preset_display_name(args[0]);
+  auto ieq = [](const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(a[i])) !=
+          std::tolower(static_cast<unsigned char>(b[i])))
+        return false;
+    }
+    return true;
+  };
+
+  std::string match;
+  for (const auto& p : *presets) {
+    if (ieq(preset_display_name(p), wanted)) {
+      match = preset_display_name(p);
+      break;
+    }
+  }
+  if (match.empty()) {
+    // The device resolves the id straight to a path without checking it
+    // exists, so an unmatched name would silently blank the panel. Refuse.
+    std::cerr << "Unknown preset: \"" << args[0] << "\"\n"
+              << "Run `reed-tpse preset list` to see what this firmware "
+                 "ships.\n";
+    return 1;
+  }
+
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+  device.drain();
+  device.handshake();
+
+  // The leading number is not used by the firmware -- it splits on ": " and
+  // keeps the name -- but the prefix must be present or the command is not
+  // dispatched at all.
+  const std::string id = "Pre-set 1: " + match;
+  if (!device.set_preset(id)) {
+    std::cerr << "No response to 'POST waterBlockScreenId'\n";
+    return 1;
+  }
+
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->preset = match;
+  reed::ConfigManager::save_state(*state);
+
+  std::cout << "Preset set to: " << match << "\n";
+  return 0;
+}
+
 static int cmd_upload(const std::string& file, bool verbose) {
   if (verbose) std::cout << "Checking file: " << file << "\n";
 
@@ -550,6 +634,7 @@ static int cmd_display(const std::string& port,
   state->media = media_files;
   state->ratio = ratio;
   state->brightness = brightness;
+  state->preset.reset();  // custom media and a preset are mutually exclusive
   reed::ConfigManager::save_state(*state);
 
   if (!keepalive) {
@@ -708,13 +793,27 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     return 1;
   }
 
-  device->handshake();
-  if (state->hud.enabled) {
-    device->send_spec(state->hud.cpu_name, state->hud.gpu_name);
-    device->set_temperature_unit(state->hud.temperature_unit);
-  }
-  device->set_screen_config(screen_config);
-  device->set_brightness(state->brightness);
+  auto restore = [&](reed::Device& dev) {
+    if (!dev.handshake()) return false;
+    if (state->hud.enabled) {
+      dev.send_spec(state->hud.cpu_name, state->hud.gpu_name);
+      dev.set_temperature_unit(state->hud.temperature_unit);
+    }
+    // Volatile on the device -- controller RAM, lost whenever USB power drops
+    // (which it does at S5) -- so re-apply it on every connect, not just once.
+    if (state->display_in_sleep) {
+      dev.set_display_in_sleep(*state->display_in_sleep);
+    }
+    if (state->preset) {
+      dev.set_preset("Pre-set 1: " + *state->preset);
+    } else {
+      dev.set_screen_config(screen_config);
+    }
+    dev.set_brightness(state->brightness);
+    return true;
+  };
+
+  restore(*device);
 
   if (state->hud.enabled) {
     std::cout << "Display restored with HUD (" << state->hud.metrics.size()
@@ -729,22 +828,6 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
 
   reed::SystemMonitor monitor;
   bool first_handshake_ok = false;
-
-  auto restore = [&](reed::Device& dev) {
-    if (!dev.handshake()) return false;
-    if (state->hud.enabled) {
-      dev.send_spec(state->hud.cpu_name, state->hud.gpu_name);
-      dev.set_temperature_unit(state->hud.temperature_unit);
-    }
-    // Volatile on the device -- controller RAM, lost whenever USB power drops
-    // (which it does at S5) -- so re-apply it on every connect, not just once.
-    if (state->display_in_sleep) {
-      dev.set_display_in_sleep(*state->display_in_sleep);
-    }
-    dev.set_screen_config(screen_config);
-    dev.set_brightness(state->brightness);
-    return true;
-  };
 
   // Reconnect after a handshake failure: the serial fd can die silently on USB
   // suspend/resume or when the device renumbers (/dev/ttyACM0 -> ttyACM1). Try
@@ -1145,7 +1228,7 @@ int main(int argc, char* argv[]) {
   bool needs_serial = (command == "info" || command == "display" ||
                        command == "brightness" || command == "status" ||
                        command == "raw" || command == "hud" ||
-                       command == "sleep-display");
+                       command == "sleep-display" || command == "preset");
   bool serial_optional = (command == "hud");
   if (needs_serial && port.empty()) {
     if (verbose) {
@@ -1192,6 +1275,8 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_sleep_display(port, args[0], verbose);
+  } else if (command == "preset") {
+    return cmd_preset(port, args, verbose);
   } else if (command == "upload") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse upload <file>\n";

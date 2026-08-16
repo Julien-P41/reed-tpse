@@ -33,7 +33,16 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - [ ] Screen Splitting mode support (6-metric layout)
 - [ ] Fan curve / pump control (`fanLCDSet`, `turboPump`)
 - [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
-- [ ] Screen behaviour: `rotate`, `screenFlip`, `waterfallMode`, `power`
+- [x] Firmware presets -- `reed-tpse preset`
+- [ ] Screen behaviour: `rotate`, `waterfallMode`, `power` (see note below)
+
+`rotate` is dispatched by the firmware -- `POST rotate {"degree":180}` produces
+a handler-specific `rotate--180` in the device log, which a bogus endpoint does
+not -- but no rotation is visible in an `adb screencap`, which cannot see a
+transform applied below the compositor. Whether the panel physically rotates is
+unconfirmed, so it is not exposed as a command yet. `screenFlip` is not a device
+endpoint at all; the vendor app implements it by mapping a boolean onto
+`rotate`'s `degree`.
 
 The stats overlays never needed host-side image generation: the device renders
 them itself. The screen config object carries a `sysinfoDisplay` array and a
@@ -122,6 +131,7 @@ reed-tpse upload <file>          # Upload media file
 reed-tpse display <file>         # Set display content
 reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
+reed-tpse preset <name|list>     # Show a firmware-bundled preset
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
 reed-tpse daemon start           # Start background keepalive
@@ -153,6 +163,42 @@ Warnings:  Fan LCD: No ERROR
 Exit code is `2` if the device reports any warning whose description is not
 `No ERROR`, so it drops straight into a monitoring check. `status` does not
 send `conn`, so it will not disturb what is on screen.
+
+### Presets
+
+The firmware ships its own clips in `/system/media/video/`, independent of
+anything you upload. Nothing has to be transferred to use them.
+
+```bash
+reed-tpse preset list             # read the list off the device
+reed-tpse preset "Cyber Bunker"   # select one (case- and underscore-tolerant)
+```
+
+Selection goes through `waterBlockScreenId` with only an `id`:
+
+```
+POST waterBlockScreenId {"id":"Pre-set 1: Cooling delivery"}
+  -> device loads /system/media/video/Cooling_delivery.mp4
+```
+
+Three things about that id, all established on firmware V1.0.11:
+
+- The device splits on `": "`, replaces spaces with underscores and appends
+  `.mp4`. **The leading number is not used** -- `Pre-set 1: Oasis` and
+  `Pre-set 8: Oasis` both load `Oasis.mp4`.
+- It does **not** check the file exists. `Pre-set 99: Nonsense` cheerfully
+  tries `/system/media/video/Nonsense.mp4` and blanks the panel. `preset`
+  therefore validates the name against the device's real listing and refuses
+  anything else, rather than letting a typo look like a dead screen.
+- The `Pre-set <n>: ` prefix is required. A bare `{"id":"Oasis"}` is not
+  dispatched at all.
+
+The list is read from the device rather than hardcoded, so it tracks the
+firmware: this one ships 15 clips where the vendor app exposes 7. `standby`
+is filtered out -- it is the sleep animation, not a preset.
+
+A preset and custom media are mutually exclusive. Selecting a preset is
+remembered, `display` clears it, and the daemon re-applies whichever is active.
 
 ### Sleep display
 

@@ -189,6 +189,11 @@ std::optional<DisplayState> ConfigManager::load_state() {
     state.display_in_sleep = get_bool(json, "display_in_sleep", false);
   }
 
+  {
+    const std::string p = get_string(json, "preset", "");
+    if (!p.empty()) state.preset = p;
+  }
+
   const auto& hud_val = get_value(json, "hud");
   if (hud_val.is<picojson::object>()) {
     HudConfig& h = state.hud;
@@ -233,6 +238,9 @@ bool ConfigManager::save_state(const DisplayState& state) {
   // Written only once configured, so an untouched device is never overridden.
   if (state.display_in_sleep) {
     obj["display_in_sleep"] = picojson::value(*state.display_in_sleep);
+  }
+  if (state.preset) {
+    obj["preset"] = picojson::value(*state.preset);
   }
 
   picojson::array hud_metrics_arr;

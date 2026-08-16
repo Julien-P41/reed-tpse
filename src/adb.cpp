@@ -127,6 +127,33 @@ std::optional<std::vector<std::string>> Adb::list_media() {
   return files;
 }
 
+std::optional<std::vector<std::string>> Adb::list_presets() {
+  auto result = run_command({"shell", "ls", "-1", PRESET_PATH});
+  if (!result) return std::nullopt;
+  if (result->find("No such file") != std::string::npos ||
+      result->find("error:") != std::string::npos) {
+    return std::vector<std::string>{};
+  }
+
+  std::vector<std::string> presets;
+  std::istringstream iss(*result);
+  std::string line;
+  while (std::getline(iss, line)) {
+    while (!line.empty() &&
+           (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) {
+      line.pop_back();
+    }
+    if (line.size() <= 4 || line.compare(line.size() - 4, 4, ".mp4") != 0) {
+      continue;
+    }
+    line.erase(line.size() - 4);
+    // The sleep animation is not a selectable preset.
+    if (line == "standby") continue;
+    presets.push_back(line);
+  }
+  return presets;
+}
+
 bool Adb::remove(const std::string& filename) {
   std::string remote_path = std::string(MEDIA_PATH) + filename;
   auto result = run_command({"shell", "rm", remote_path});
