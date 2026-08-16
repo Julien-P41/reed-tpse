@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - [ ] Custom overlay layouts (beyond the firmware's 9 anchor points and 3-metric cap)
 - [ ] Network throughput
 - [ ] Screen Splitting mode support (6-metric layout)
-- [ ] Fan curve / pump control (`fanLCDSet`, `turboPump`)
+- [x] Fan telemetry + safe reset -- `reed-tpse fan` (curve shape still unknown; see Fan section)
 - [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
 - [x] Firmware presets -- `reed-tpse preset`
 - [ ] Screen behaviour: `rotate`, `waterfallMode`, `power` (see note below)
@@ -132,6 +132,7 @@ reed-tpse display <file>         # Set display content
 reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
+reed-tpse fan [--reset]          # LCD fan/pump RPM, or reset the fan profile
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
 reed-tpse daemon start           # Start background keepalive
@@ -163,6 +164,47 @@ Warnings:  Fan LCD: No ERROR
 Exit code is `2` if the device reports any warning whose description is not
 `No ERROR`, so it drops straight into a monitoring check. `status` does not
 send `conn`, so it will not disturb what is on screen.
+
+### Fan (LCD / pump-head fan)
+
+```bash
+reed-tpse fan            # LCD fan and pump RPM
+reed-tpse fan --reset    # restore the firmware's own fan behaviour
+```
+
+The pump is read-only here -- it is driven by the motherboard/BIOS.
+
+**The fan needs two things, and neither works alone.** This is why several
+rounds of investigation concluded it was not host-controllable:
+
+1. `fanLCDSet` installs a four-tier profile. On its own it changes nothing.
+2. `POST all` (the HUD telemetry push) is what makes the device evaluate that
+   profile and act on it.
+
+Test the profile without telemetry flowing, or push telemetry without touching
+the profile, and each looks inert. Verified on firmware V1.0.11: with the
+default profile, the fan sits at **4170 RPM when no host telemetry has ever
+been pushed, and drops to 2040 RPM once it is** -- so simply running the daemon
+with the HUD enabled halves the speed of the loudest component on the cooler.
+
+Selecting a tier (`Low`/`Mid`/`High`/`Full Speed`) makes no difference while
+the profile's curve arrays are empty -- all four measured 2040 RPM -- because
+there is no per-tier curve data to evaluate.
+
+#### ⚠ Why `--profile` refuses non-empty curves
+
+The element shape of `smartMode`/`fixedMode` is **not known**. It was inferred
+once as `[[tempC, dutyPercent], ...]` from the vendor app's ECharts config
+(x-axis 0-100 °C, y-axis 0-100 `RPM(%)`). Sending that shape **stopped the fan
+dead at 0 RPM**, and it stayed there through every telemetry value tried,
+including an all-100% profile that should have meant maximum. Only an
+empty-curve profile brought it back.
+
+So `fan --profile` refuses any file containing non-empty curve arrays unless
+`--force` is passed. A correct profile has to come from a captured vendor
+payload -- run KANALI once and capture the serial traffic -- not from
+inference. `fan --reset` sends the empty-curve profile that is the known-safe
+recovery.
 
 ### Presets
 

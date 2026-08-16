@@ -129,6 +129,17 @@ class Device {
   // prefix is not dispatched at all.
   std::optional<Response> set_preset(const std::string& id);
 
+  // Reset the LCD-fan profile to the firmware's own behaviour by installing a
+  // four-tier profile with empty curve arrays, then selecting Full Speed /
+  // Smart Mode. This is the known-safe recovery from a bad profile: with empty
+  // arrays the device falls back to its default, and the fan returns to its
+  // normal speed on the next telemetry push.
+  std::optional<Response> reset_fan_profile();
+
+  // Install a raw fan profile. The curve array element shape is NOT known --
+  // see the warning on cmd_fan. Callers are expected to have validated it.
+  std::optional<Response> set_fan_profile(const std::string& json);
+
  private:
   std::string port_;
   bool verbose_;

@@ -643,6 +643,31 @@ std::optional<Response> Device::set_preset(const std::string& id) {
   return send_command("POST", "waterBlockScreenId", content);
 }
 
+std::optional<Response> Device::set_fan_profile(const std::string& json) {
+  return send_command("POST", "fanLCDSet", json);
+}
+
+std::optional<Response> Device::reset_fan_profile() {
+  picojson::object tier;
+  tier["mode"] = picojson::value(std::string("Smart Mode"));
+  tier["smartMode"] = picojson::value(picojson::array());
+  tier["fixedMode"] = picojson::value(picojson::array());
+
+  picojson::object profile;
+  profile["speed"] = picojson::value(std::string("Full Speed"));
+  for (const char* k : {"lowSpeed", "midSpeed", "highSpeed", "fullSpeed"}) {
+    profile[k] = picojson::value(tier);
+  }
+  set_fan_profile(picojson::value(profile).serialize());
+
+  // The profile alone changes nothing; the tier/mode selection is what the
+  // device acts on once telemetry arrives.
+  picojson::object sel;
+  sel["speed"] = picojson::value(std::string("Full Speed"));
+  sel["mode"] = picojson::value(std::string("Smart Mode"));
+  return send_command("POST", "fanLCD", picojson::value(sel).serialize());
+}
+
 std::optional<Response> Device::set_temperature_unit(const std::string& unit) {
   picojson::object obj;
   obj["value"] = picojson::value(unit);  // "Celsius" or "Fahrenheit"

@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -43,6 +44,8 @@ static void print_usage(const char* prog) {
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
+         "  fan [--reset]           Show LCD fan/pump RPM, or reset the fan\n"
+         "                          profile to the firmware default\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
          "  daemon start            Start background daemon\n"
@@ -61,7 +64,12 @@ static void print_usage(const char* prog) {
          "  --foreground            Run daemon in foreground\n"
          "  --json                  Machine-readable output (status)\n"
          "  --watch <seconds>       Poll until interrupted (status)\n"
-         "  --system                Act on the system-scope unit (daemon)\n\n"
+         "  --system                Act on the system-scope unit (daemon)\n"
+         "  --reset                 Reset the fan profile (fan)\n"
+         "  --profile <file>        Send a fan profile (fan); refuses "
+         "unvalidated\n"
+         "                          curve data unless --force\n"
+         "  --force                 Override the fan-profile refusal\n\n"
          "HUD options (with `hud configure`):\n"
          "  --metrics <csv>         Comma-separated labels, max 3. Known labels:\n"
          "                          CPU Temperature, CPU Frequency, CPU Usage,\n"
@@ -516,6 +524,99 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
   reed::ConfigManager::save_state(*state);
 
   std::cout << "Preset set to: " << match << "\n";
+  return 0;
+}
+
+// True if any tier's smartMode/fixedMode array is non-empty.
+static bool profile_has_curve_data(const picojson::value& v) {
+  if (!v.is<picojson::object>()) return false;
+  for (const auto& [key, tier] : v.get<picojson::object>()) {
+    if (!tier.is<picojson::object>()) continue;
+    for (const char* arr : {"smartMode", "fixedMode"}) {
+      const auto& t = tier.get<picojson::object>();
+      auto it = t.find(arr);
+      if (it != t.end() && it->second.is<picojson::array>() &&
+          !it->second.get<picojson::array>().empty()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static int cmd_fan(const std::string& port, bool reset,
+                   const std::string& profile_path, bool force, bool verbose) {
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+  device.drain();
+
+  if (!profile_path.empty()) {
+    std::ifstream f(profile_path);
+    if (!f) {
+      std::cerr << "Cannot read profile: " << profile_path << "\n";
+      return 1;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    const std::string json = ss.str();
+
+    picojson::value parsed;
+    const std::string err = picojson::parse(parsed, json);
+    if (!err.empty()) {
+      std::cerr << "Profile is not valid JSON: " << err << "\n";
+      return 1;
+    }
+
+    if (profile_has_curve_data(parsed) && !force) {
+      std::cerr
+          << "Refusing to send a profile with non-empty curve arrays.\n\n"
+          << "  The element shape of smartMode/fixedMode is NOT known. It was\n"
+          << "  inferred once as [[tempC, dutyPercent], ...] from the vendor\n"
+          << "  app's chart config; sending that shape stopped the LCD fan\n"
+          << "  dead (0 RPM) on firmware V1.0.11, and no telemetry value would\n"
+          << "  restart it -- only `reed-tpse fan --reset` did.\n\n"
+          << "  A correct profile has to come from a captured vendor payload,\n"
+          << "  not from inference. If this file IS such a capture, re-run\n"
+          << "  with --force.\n";
+      return 1;
+    }
+
+    if (!device.set_fan_profile(json)) {
+      std::cerr << "No response to 'POST fanLCDSet'\n";
+      return 1;
+    }
+    std::cout << "Fan profile sent"
+              << (force ? " (--force: unvalidated curve data)" : "") << ".\n"
+              << "Note: a profile does nothing until host telemetry is being\n"
+              << "pushed -- run the daemon with the HUD enabled.\n";
+    return 0;
+  }
+
+  if (reset) {
+    if (!device.reset_fan_profile()) {
+      std::cerr << "No response while resetting the fan profile\n";
+      return 1;
+    }
+    std::cout << "Fan profile reset to firmware default (empty curves, "
+                 "Full Speed / Smart Mode).\n"
+              << "It takes effect on the next telemetry push; run the daemon "
+                 "to resume those.\n";
+    return 0;
+  }
+
+  auto status = device.get_status();
+  if (!status) {
+    std::cerr << "No response to 'STATE all'\n";
+    return 1;
+  }
+  std::cout << "Fan LCD: " << (status->fan_lcd.empty() ? "-" : status->fan_lcd)
+            << " RPM\n"
+            << "Pump:    "
+            << (status->turbo_pump.empty() ? "-" : status->turbo_pump)
+            << " RPM (BIOS-controlled; read-only)\n";
   return 0;
 }
 
@@ -1173,6 +1274,9 @@ int main(int argc, char* argv[]) {
   bool foreground = false;
   bool json_output = false;
   bool system_scope = false;
+  bool fan_reset = false;
+  bool force = false;
+  std::string fan_profile;
   int watch = 0;
   int keepalive_interval = config.keepalive_interval;
 
@@ -1200,6 +1304,12 @@ int main(int argc, char* argv[]) {
       json_output = true;
     } else if (arg == "--system") {
       system_scope = true;
+    } else if (arg == "--reset") {
+      fan_reset = true;
+    } else if (arg == "--force") {
+      force = true;
+    } else if (arg == "--profile") {
+      if (++i < argc) fan_profile = argv[i];
     } else if (arg == "--watch") {
       if (++i < argc) watch = std::atoi(argv[i]);
     } else if (arg == "-h" || arg == "--help") {
@@ -1228,7 +1338,8 @@ int main(int argc, char* argv[]) {
   bool needs_serial = (command == "info" || command == "display" ||
                        command == "brightness" || command == "status" ||
                        command == "raw" || command == "hud" ||
-                       command == "sleep-display" || command == "preset");
+                       command == "sleep-display" || command == "preset" ||
+                       command == "fan");
   bool serial_optional = (command == "hud");
   if (needs_serial && port.empty()) {
     if (verbose) {
@@ -1275,6 +1386,8 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_sleep_display(port, args[0], verbose);
+  } else if (command == "fan") {
+    return cmd_fan(port, fan_reset, fan_profile, force, verbose);
   } else if (command == "preset") {
     return cmd_preset(port, args, verbose);
   } else if (command == "upload") {
