@@ -579,6 +579,12 @@ std::optional<Response> Device::send_sysinfo(
       memory["load"] = picojson::value(to_double(item.value));
     } else if (item.label == "Hard Disk Temperature") {
       disk["temperature"] = picojson::value(to_double(item.value));
+    } else if (item.label == "CPU Power") {
+      cpu["power"] = picojson::value(to_double(item.value));
+    } else if (item.label == "GPU Power") {
+      gpu["power"] = picojson::value(to_double(item.value));
+    } else if (item.label == "Memory Temperature") {
+      memory["temperature"] = picojson::value(to_double(item.value));
     }
   }
 

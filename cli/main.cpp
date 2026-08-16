@@ -67,7 +67,8 @@ static void print_usage(const char* prog) {
          "                          CPU Voltage, GPU Temperature, GPU Frequency,\n"
          "                          GPU Usage, GPU Voltage, Motherboard Temperature,\n"
          "                          Memory Frequency, Memory Utilization,\n"
-         "                          Hard Disk Temperature, Date&Time\n"
+         "                          Hard Disk Temperature, CPU Power, GPU Power,\n"
+         "                          Memory Temperature, Date&Time\n"
          "  --position <pos>        Top | Center | Bottom (default: Top)\n"
          "  --align <align>         Left | Center | Right (default: Left)\n"
          "  --color <hex>           e.g. #FFFFFF (default: #FFFFFF)\n"
@@ -95,6 +96,7 @@ const std::set<std::string>& known_hud_labels() {
       "CPU Voltage",             "GPU Temperature",     "GPU Frequency",
       "GPU Usage",               "GPU Voltage",         "Motherboard Temperature",
       "Memory Frequency",        "Memory Utilization",  "Hard Disk Temperature",
+      "CPU Power",               "GPU Power",           "Memory Temperature",
       "Date&Time",
   };
   return labels;
@@ -158,18 +160,64 @@ std::vector<reed::SysinfoData> build_sysinfo(
       d.value = fmt(m.memory.usage_percent, 1);
       d.unit = "%";
     } else if (label == "Memory Frequency") {
-      d.value = fmt(m.memory.frequency_mhz);
+      d.value = fmt(m.memory.frequency_mhz.value_or(0.0));
       d.unit = "MHz";
+    } else if (label == "CPU Voltage") {
+      d.value = fmt(m.cpu.voltage_v.value_or(0.0), 3);
+      d.unit = "V";
+    } else if (label == "CPU Power") {
+      d.value = fmt(m.cpu.power_w.value_or(0.0), 1);
+      d.unit = "W";
+    } else if (label == "GPU Power") {
+      d.value = fmt(m.gpu.power_w.value_or(0.0), 1);
+      d.unit = "W";
+    } else if (label == "Motherboard Temperature") {
+      d.value = fmt(m.motherboard.temperature_c.value_or(0.0));
+      d.unit = "°C";
+    } else if (label == "Hard Disk Temperature") {
+      d.value = fmt(m.disk.temperature_c.value_or(0.0));
+      d.unit = "°C";
+    } else if (label == "Memory Temperature") {
+      d.value = fmt(m.memory.temperature_c.value_or(0.0));
+      d.unit = "°C";
     } else {
-      // Labels we don't yet collect (CPU Voltage, Motherboard Temperature,
-      // Hard Disk Temperature, Date & Time) are still valid for configure —
-      // we send zeros so the overlay slot exists, and Date & Time is
-      // rendered from the device's own clock.
+      // Date&Time is drawn from the device's own clock; it needs no value.
       d.value = "0";
     }
     out.push_back(d);
   }
   return out;
+}
+
+// Whether this machine can actually source a label. Date&Time is always fine
+// (device clock); everything else must have a real reading behind it, or the
+// overlay burns one of three slots rendering a permanent 0.
+bool metric_available(const std::string& label, const reed::SystemMetrics& m) {
+  if (label == "CPU Voltage") return m.cpu.voltage_v.has_value();
+  if (label == "CPU Power") return m.cpu.power_w.has_value();
+  if (label == "GPU Power") return m.gpu.power_w.has_value();
+  if (label == "Motherboard Temperature")
+    return m.motherboard.temperature_c.has_value();
+  if (label == "Hard Disk Temperature") return m.disk.temperature_c.has_value();
+  if (label == "Memory Temperature") return m.memory.temperature_c.has_value();
+  if (label == "Memory Frequency") return m.memory.frequency_mhz.has_value();
+  return true;
+}
+
+// Why a metric is missing, so the warning is actionable rather than a shrug.
+std::string metric_hint(const std::string& label) {
+  if (label == "CPU Power")
+    return "RAPL energy_uj is root-only on kernels >= 5.10; the daemon runs "
+           "unprivileged";
+  if (label == "CPU Voltage" || label == "Motherboard Temperature")
+    return "needs a super-I/O sensor -- try `sudo modprobe nct6775`";
+  if (label == "Memory Temperature")
+    return "needs a DIMM sensor (jc42/spd5118); most desktop boards have none";
+  if (label == "Hard Disk Temperature")
+    return "needs an nvme hwmon or `sudo modprobe drivetemp` for SATA";
+  if (label == "Memory Frequency")
+    return "DIMM speed needs an SPD/DMI read, which requires root";
+  return "no data source on this system";
 }
 
 }  // namespace
@@ -913,6 +961,21 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
       return 1;
     }
   }
+  // Warn about anything this machine cannot source. The firmware allows only
+  // three metrics, so a slot that can only ever render 0 is worth flagging
+  // loudly rather than letting it look like a device fault later.
+  {
+    reed::SystemMonitor probe;
+    probe.sample();  // primes the CPU-usage and RAPL deltas
+    const reed::SystemMetrics sample = probe.sample();
+    for (const auto& m : h.metrics) {
+      if (metric_available(m, sample)) continue;
+      std::cerr << "Warning: \"" << m
+                << "\" has no data source on this system -- it will render 0.\n"
+                << "         " << metric_hint(m) << "\n";
+    }
+  }
+
   if (h.metrics.size() > 3) {
     std::cerr << "Firmware supports at most 3 HUD metrics; got "
               << h.metrics.size() << ".\n";

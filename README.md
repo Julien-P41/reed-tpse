@@ -16,7 +16,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - Black screen instead of the demo loop when the host is off (`sleep-display`)
 - Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
-- On-device system telemetry overlay (CPU/GPU temp, usage, frequency, voltage; RAM utilization; motherboard/disk temps; date & time)
+- On-device system telemetry overlay (CPU/GPU temp, usage, frequency, voltage, power; RAM; motherboard/disk temps; date & time), with a warning for any metric this host cannot source
 - systemd service (user or system scope) for persistent display across reboots
 - Exclusive port locking, so a second instance can't corrupt the first's replies
 - Auto-detects device (scans /dev/ttyACM*)
@@ -268,6 +268,31 @@ Values are sampled in the keepalive daemon from:
   `/sys/class/drm/card*/device` for AMD (`gpu_busy_percent`, hwmon,
   `pp_dpm_sclk`)
 - Memory: `/proc/meminfo`
+
+#### Metric availability
+
+The firmware accepts 16 labels, but a Linux host cannot source all of them, and
+the overlay only has three slots -- a metric with no source silently renders a
+permanent `0`, which reads as a device fault. `hud configure` samples the
+machine first and warns instead:
+
+```
+Warning: "CPU Power" has no data source on this system -- it will render 0.
+         RAPL energy_uj is root-only on kernels >= 5.10; the daemon runs unprivileged
+```
+
+| Metric | Source |
+|---|---|
+| CPU Temperature / Usage / Frequency | `coretemp`/`k10temp` hwmon, `/proc/stat`, cpufreq |
+| CPU Voltage | super-I/O `in0` (VCore) — needs `nct6775` or similar loaded |
+| CPU Power | RAPL `energy_uj` — **root-only** since kernel 5.10 (Platypus), so unavailable to the daemon |
+| GPU Temperature / Usage / Frequency / Voltage / Power | `nvidia-smi`, or AMD sysfs |
+| Memory Utilization | `/proc/meminfo` |
+| Memory Frequency | needs an SPD/DMI read (root) — normally unavailable |
+| Memory Temperature | DIMM sensor (`jc42`/`spd5118`) — most desktop boards have none |
+| Motherboard Temperature | super-I/O `SYSTIN`, resolved by label |
+| Hard Disk Temperature | `nvme` hwmon, or `drivetemp` for SATA |
+| Date&Time | drawn from the device's own clock; no host value needed |
 
 The HUD config is persisted in `~/.local/state/reed-tpse/display.json`
 alongside the media state, so it survives reboots.

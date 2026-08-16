@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -90,6 +91,52 @@ void SystemMonitor::probe_hardware() {
   // CPU temperature source — AMD Ryzen uses k10temp / zenpower, Intel uses coretemp.
   cpu_hwmon_dir_ = find_hwmon_by_name({"k10temp", "zenpower", "coretemp"});
 
+  // Super-I/O chip: the only source for VCore and board temperature. Needs the
+  // matching module loaded (nct6775 on most ASUS boards) or it is simply absent.
+  superio_hwmon_dir_ = find_hwmon_by_name(
+      {"nct6798", "nct6797", "nct6796", "nct6793", "nct6791", "nct6775",
+       "it8688", "it8686", "it8628"});
+  if (!superio_hwmon_dir_.empty()) {
+    // Board temperature is whichever tempN carries the SYSTIN label; the index
+    // is not stable across chips, so resolve it by label rather than guessing.
+    std::error_code lec;
+    for (const auto& e : fs::directory_iterator(superio_hwmon_dir_, lec)) {
+      if (lec) break;
+      const std::string fn = e.path().filename().string();
+      if (fn.size() < 6 || fn.rfind("temp", 0) != 0) continue;
+      if (fn.find("_label") == std::string::npos) continue;
+      const std::string label = read_trim(e.path().string());
+      if (label != "SYSTIN") continue;
+      std::string input = e.path().string();
+      input.replace(input.size() - 6, 6, "_input");
+      if (fs::exists(input)) mb_temp_path_ = input;
+      break;
+    }
+  }
+
+  // Disk: NVMe exposes its controller temperature via hwmon; SATA needs the
+  // drivetemp module.
+  std::string disk_hwmon = find_hwmon_by_name({"nvme", "drivetemp"});
+  if (!disk_hwmon.empty() && fs::exists(disk_hwmon + "/temp1_input")) {
+    disk_temp_path_ = disk_hwmon + "/temp1_input";
+  }
+
+  // DIMM temperature: DDR4 via jc42, DDR5 via spd5118. Most desktop boards
+  // expose neither.
+  std::string mem_hwmon = find_hwmon_by_name({"jc42", "spd5118"});
+  if (!mem_hwmon.empty() && fs::exists(mem_hwmon + "/temp1_input")) {
+    mem_temp_path_ = mem_hwmon + "/temp1_input";
+  }
+
+  // CPU package power via RAPL. energy_uj is root-only on kernels >= 5.10
+  // (the Platypus side-channel mitigation), so check readability, not just
+  // existence -- the daemon runs unprivileged.
+  {
+    const std::string rapl = "/sys/class/powercap/intel-rapl:0/energy_uj";
+    std::ifstream probe(rapl);
+    if (probe) rapl_energy_path_ = rapl;
+  }
+
   // GPU backend: prefer Nvidia dGPU over AMD iGPU.
   if (have_command("nvidia-smi")) {
     // Confirm nvidia-smi can actually query something.
@@ -131,6 +178,32 @@ void SystemMonitor::probe_hardware() {
 
 CpuMetrics SystemMonitor::sample_cpu() {
   CpuMetrics m;
+
+  if (!superio_hwmon_dir_.empty()) {
+    const std::string raw = read_trim(superio_hwmon_dir_ + "/in0_input");
+    if (!raw.empty()) m.voltage_v = parse_double(raw) / 1000.0;
+  }
+
+  // Power is an energy counter, so it needs two samples to become a rate.
+  if (!rapl_energy_path_.empty()) {
+    const std::string raw = read_trim(rapl_energy_path_);
+    if (!raw.empty()) {
+      const int64_t uj = static_cast<int64_t>(parse_double(raw));
+      const int64_t now_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now().time_since_epoch())
+              .count();
+      if (prev_energy_uj_ >= 0 && now_us > prev_energy_us_) {
+        int64_t d_uj = uj - prev_energy_uj_;
+        if (d_uj >= 0) {  // negative means the counter wrapped; skip the sample
+          m.power_w = static_cast<double>(d_uj) /
+                      static_cast<double>(now_us - prev_energy_us_);
+        }
+      }
+      prev_energy_uj_ = uj;
+      prev_energy_us_ = now_us;
+    }
+  }
 
   // Temperature
   if (!cpu_hwmon_dir_.empty()) {
@@ -199,8 +272,8 @@ GpuMetrics SystemMonitor::sample_gpu() {
   if (gpu_backend_ == GpuBackend::Nvidia) {
     // One shell-out gets everything. nvidia-smi is fast (~50ms) and stable.
     std::string csv = run_capture(
-        "nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,clocks.gr "
-        "--format=csv,noheader,nounits -i 0 2>/dev/null");
+        "nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,clocks.gr,"
+        "power.draw --format=csv,noheader,nounits -i 0 2>/dev/null");
     if (!csv.empty()) {
       std::istringstream ss(csv);
       std::string line;
@@ -222,6 +295,10 @@ GpuMetrics SystemMonitor::sample_gpu() {
           m.usage_percent = parse_double(parts[0]);
           m.temperature_c = parse_double(parts[1]);
           m.frequency_mhz = parse_double(parts[2]);
+        }
+        // Reported as [N/A] on cards without a power sensor.
+        if (parts.size() >= 4 && parts[3].find("N/A") == std::string::npos) {
+          m.power_w = parse_double(parts[3]);
         }
       }
     }
@@ -267,8 +344,31 @@ GpuMetrics SystemMonitor::sample_gpu() {
   return m;
 }
 
+MotherboardMetrics SystemMonitor::sample_motherboard() {
+  MotherboardMetrics m;
+  if (!mb_temp_path_.empty()) {
+    const std::string raw = read_trim(mb_temp_path_);
+    if (!raw.empty()) m.temperature_c = parse_double(raw) / 1000.0;
+  }
+  return m;
+}
+
+DiskMetrics SystemMonitor::sample_disk() {
+  DiskMetrics m;
+  if (!disk_temp_path_.empty()) {
+    const std::string raw = read_trim(disk_temp_path_);
+    if (!raw.empty()) m.temperature_c = parse_double(raw) / 1000.0;
+  }
+  return m;
+}
+
 MemoryMetrics SystemMonitor::sample_memory() {
   MemoryMetrics m;
+
+  if (!mem_temp_path_.empty()) {
+    const std::string raw = read_trim(mem_temp_path_);
+    if (!raw.empty()) m.temperature_c = parse_double(raw) / 1000.0;
+  }
   std::ifstream f("/proc/meminfo");
   std::string line;
   int64_t total_kb = 0, avail_kb = 0;
@@ -295,6 +395,8 @@ SystemMetrics SystemMonitor::sample() {
   s.cpu = sample_cpu();
   s.gpu = sample_gpu();
   s.memory = sample_memory();
+  s.motherboard = sample_motherboard();
+  s.disk = sample_disk();
   return s;
 }
 
