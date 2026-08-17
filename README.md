@@ -46,6 +46,9 @@ firmware V1.0.11); where something is only inferred, the text says so.
 - Read device status: fan/pump RPM, health warnings, free storage
 - LCD fan speed control (named tiers or any duty 0-100%)
 - Black screen instead of the demo loop when the host is off (`sleep-display`)
+- Firmware presets, played from the device's own storage (`preset`)
+- Host power events -- lock / unlock / shutdown -- manually or mirrored
+  automatically by the daemon (`power`)
 - Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
 - On-device system telemetry overlay (CPU/GPU temp, usage, frequency, voltage, power; RAM; motherboard/disk temps; date & time), with a warning for any metric this host cannot source
@@ -56,115 +59,23 @@ firmware V1.0.11); where something is only inferred, the text says so.
 
 ## TODO
 
-- [x] CPU stats overlay (temperature, usage, clock speed) — `reed-tpse hud`
-- [x] GPU stats (temperature, usage, clock speed) — `reed-tpse hud`
-- [x] RAM usage — `reed-tpse hud`
-- [x] Fan/pump RPM display — `reed-tpse status`
-- [ ] Custom overlay layouts (beyond the firmware's 9 anchor points and 3-metric cap)
-- [ ] Network throughput
-- [x] Frame CRC/length validation + protocol tests
-- [ ] Screen Splitting mode support (6-metric layout)
-- [x] Fan control -- `reed-tpse fan low|mid|high|full` / `--speed 0-100`
-- [ ] Fan `smartMode` curve values (need a captured vendor payload)
-- [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
-- [x] Firmware presets -- `reed-tpse preset`
-- [x] `power` host events -- `reed-tpse power`, plus daemon auto mode
-- [ ] `waterfallMode` is SE-only; `rotate` is unimplemented in firmware -- see below
+Open:
 
-### What the firmware can actually act on
+- [ ] Fan `smartMode` curve values -- shape known, values need a captured
+      vendor payload
+- [ ] Screen Splitting mode (6-metric, two-zone layout)
+- [ ] Network throughput (the `PcInfo` blob already carries it; nothing
+      collects it host-side)
+- [ ] Custom overlay layouts, beyond the firmware's 9 anchor points and
+      3-metric cap
 
-The device's dispatcher reaches its UI through exactly one interface,
-`IOnPcControlCallBack`. Its methods are the complete set of things an incoming
-command can cause:
+Done in this fork: `status`, `raw`, `fan`, `preset`, `sleep-display`, `power`
+(+ daemon auto mode), the full HUD metric set, frame CRC/length validation,
+protocol and config tests, exclusive port locking, the system/user unit split
+and a udev rule.
 
-```
-onConnected  onDisConnect  onReConnect   onRefreshUI    refreshShowData
-onBlockScreen              screenConfigChange           presetConfigChange
-onDoBrightness             onDoPower     onWaterfallModeChange
-onFileUpload               nameTitleChange
-```
-
-That list is a useful predictor: an endpoint with no corresponding callback
-cannot do anything however well-formed the payload is.
-
-**`rotate` is "Mirror Mode", and it is not implemented on firmware V1.0.11.**
-The vendor app calls it Mirror Mode -- *"a mirror image of PANORAMA screen for
-users with a left-mounted chassis"* -- and warns that *"PANORAMA water cooling
-will restart upon confirming"*. So it is a persisted setting applied at boot,
-not a live transform, which means the absent callback below is not by itself
-evidence of anything. What settles it is that the firmware carries no
-app-specific mirror implementation and the dispatcher has no reboot path, on
-top of the empirical results. It is dispatched and parsed
--- `POST rotate {"degree":180}` logs a handler-specific `rotate--180`, which a
-bogus endpoint never produces -- but there is no rotation callback in the
-interface above, no rotate field on the device's `ScreenConfig` entity, and no
-app-specific rotation symbol anywhere in `HomeUI.apk`. Confirmed empirically
-too: Android's own `mRotation` stays `ROTATION_0` across `degree` values of
-0/90/180/270, string and integer forms, alternate field names, and after each of
-the plausible "latches" (a telemetry push, `conn`, and a screen-config
-re-apply). It is therefore not exposed as a command.
-
-`screenFlip` is not a device endpoint at all; the vendor app implements it by
-mapping a boolean onto `rotate`'s `degree`, so it is inert here for the same
-reason.
-
-Nor does the app rotate media host-side before upload: there is no `sharp`
-rotate, no ffmpeg transpose and no EXIF handling anywhere in its main process.
-
-`waterfallMode` and `power` are different -- both have callbacks *and* device
-implementations.
-
-**`waterfallMode`** is a 90° re-layout of the **parameter display**, for people
-who mount the cooler rotated: *"a more reasonable parameter display for users
-who rotate the watercooler by 90 degrees"*. It moves the sysinfo overlay, not
-the media. The firmware carries the implementation
-(`MainActivity.onWaterfallModeChange`, `doWaterfallMode`,
-`changeWaterModelPosition`, `getWaterfallInsets`, `waterfallModePosition`).
-
-**It does nothing on a Panorama 360 ARGB.** Tested properly -- three metrics
-rendered over a black image, so there was a parameter display to move -- the
-layout was pixel-identical before and after, and `MainActivity`'s own
-`--onWaterfallModeChange--` log never fired across seven payload shapes
-(`enable` true/1/"true", `value`, `mode`, `waterfallMode`, `open`). The
-dispatcher accepts the frame and never reaches the handler. The vendor app
-exposes this only on `panoramaSE`, which fits: the firmware is shared, the
-feature is not.
-
-**`power` is a host power-event notification, not a screen switch.** The field
-is `event`, and sending anything else throws `---Exception---No value for event`
-on the device -- which is how the field was found, after seven payload shapes
-built around `enable` had quietly failed. The vocabulary comes from the vendor
-app's own strings:
-
-```
-ac-power  on-battery  shutdown  lock-screen  unlock-screen
-```
-
-KANALI uses it to tell the cooler what the host is doing. Verified on firmware
-V1.0.11 (`--onDoPower--<event>` then `--showStandby--` / `hindStandby` in the
-device log):
-
-| Event | With `sleep-display on` | Effect |
-|---|---|---|
-| `lock-screen` | plays the standby clip | panel leaves the media |
-| `shutdown` | **full black** | panel blanks |
-| `unlock-screen` | -- | hides standby, restores the media |
-
-So `shutdown` and `lock-screen` are not the same despite both logging
-`--showStandby--`: only `shutdown` blanks completely. That makes
-`power {"event":"shutdown"}` plus `sleep-display on` the deterministic way to
-darken the panel at host shutdown, rather than waiting out the ~60s keepalive
-timeout.
-
-⚠ Measuring this needs the serial port held **open**. Every one-shot CLI
-invocation closes the port on exit, and the device treats the following
-reconnect as a wake -- `--onReConnect--` then `hindStandby` -- so the panel
-comes straight back and the command looks inert. Several rounds of "power does
-nothing" were this artefact.
-
-The stats overlays never needed host-side image generation: the device renders
-them itself. The screen config object carries a `sysinfoDisplay` array and a
-`settings{position,color,align,badges}` block, and the host only pushes values.
+Not possible on firmware V1.0.11, established rather than assumed: `rotate`
+(unimplemented) and `waterfallMode` (present but SE-only). Details below.
 
 ## Requirements
 
@@ -223,6 +134,46 @@ Error: /dev/ttyACM0 is already open by PID 4898 (reed-tpse).
 `Type=oneshot` unit and sleeps for the length of a video, set
 `TimeoutStartSec` above that sleep — systemd's default is 90s and will
 otherwise kill the script partway through.
+
+## udev rule
+
+`udev/71-reed-tpse.rules` grants the device to the logged-in user and, more
+usefully, creates a stable `/dev/tryx-panorama` symlink so re-enumeration
+(`ttyACM0` becoming `ttyACM1` after a USB suspend) stops mattering:
+
+```bash
+cd ~/reed-tpse          # repo root -- `make install` leaves you in build/
+sudo cp udev/71-reed-tpse.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# confirm the symlink appeared, then point the config at it
+ls -l /dev/tryx-panorama
+mkdir -p ~/.config/reed-tpse
+echo '{"port":"/dev/tryx-panorama"}' > ~/.config/reed-tpse/config.json
+```
+
+or `cmake .. -DREED_INSTALL_UDEV=ON` (installs to `/etc/udev/rules.d` by
+default -- deliberately not under `CMAKE_INSTALL_PREFIX`, since udev does not
+read `/usr/local/lib/udev/rules.d` and installing there would silently do
+nothing).
+
+`18d1:2d03` is Google's Android Open Accessory VID/PID and is not unique to this
+cooler, so the product string is matched too (`cm01*` -- ours reports `cm01`,
+the SE reports `cm01_se`). Note `uaccess` is seat-based and does not cover a
+system-scope daemon running as a user who is not logged in; keep that account in
+the serial group.
+
+Verified on Ubuntu 24.04 with a Panorama 360 ARGB:
+
+```
+/dev/tryx-panorama -> ttyACM0
+crw-rw----+ root dialout /dev/ttyACM0     # '+' = ACL present
+user:atlance:rw-                          # granted by uaccess
+```
+
+Pinning `port` to the symlink is worth doing beyond surviving renumbering:
+without it the tool auto-detects by opening every `/dev/ttyACM*` in turn and
+handshaking, which means sending frames to unrelated CDC-ACM hardware.
 
 ## Usage
 
@@ -391,7 +342,8 @@ reed-tpse power battery     # host on battery
 ```
 
 `power` tells the device what the *host* is doing; it is not a screen switch.
-See the endpoint notes above for the wire details.
+The wire details are under [What the firmware can actually act
+on](#what-the-firmware-can-actually-act-on).
 
 ⚠ The panel wakes again the moment anything reopens the serial port -- the
 device treats a reconnect as a wake (`--onReConnect--` then `hindStandby`). So
@@ -525,7 +477,7 @@ displayInSleep · waterfallMode · fanLCDSet · turboPump · mediaDelete
 power · reboot
 ```
 
-## HUD (telemetry overlay)
+### HUD (telemetry overlay)
 
 The Panorama's firmware natively renders a system-telemetry overlay on top of
 the configured media — no host-side frame compositing is involved. We send it
@@ -543,7 +495,7 @@ reed-tpse hud status    # show current config
 reed-tpse hud clear     # turn the overlay off
 ```
 
-### Known labels
+#### Known labels
 
 Metric labels are defined by the firmware. Unknown labels are rejected:
 
@@ -554,7 +506,7 @@ Motherboard Temperature, Memory Frequency, Memory Utilization,
 Hard Disk Temperature, Date & Time
 ```
 
-### Layout options
+#### Layout options
 
 - `--position Top|Center|Bottom` × `--align Left|Center|Right` → 9 anchor points
 - `--color "#RRGGBB"` text color
@@ -568,7 +520,7 @@ Hard Disk Temperature, Date & Time
 not arbitrary pixel coordinates. If you need free placement or more than 3
 metrics, you'd have to composite frames host-side (not supported here).
 
-### Telemetry sources
+#### Telemetry sources
 
 Values are sampled in the keepalive daemon from:
 
@@ -583,7 +535,7 @@ The firmware renders the chosen metrics in its own fixed order, not the order
 they are given -- asking for `CPU Temperature,GPU Temperature,Date&Time` renders
 GPU first. `--metrics` order is therefore cosmetic.
 
-#### Metric availability
+##### Metric availability
 
 The firmware accepts 16 labels, but a Linux host cannot source all of them, and
 the overlay only has three slots -- a metric with no source silently renders a
@@ -694,45 +646,100 @@ round-trip -- every field, optionals staying unset, `false` being
 distinguishable from unset, and a load/mutate/save cycle preserving the
 settings that share the state file.
 
-## udev rule
+### What the firmware can actually act on
 
-`udev/71-reed-tpse.rules` grants the device to the logged-in user and, more
-usefully, creates a stable `/dev/tryx-panorama` symlink so re-enumeration
-(`ttyACM0` becoming `ttyACM1` after a USB suspend) stops mattering:
-
-```bash
-cd ~/reed-tpse          # repo root -- `make install` leaves you in build/
-sudo cp udev/71-reed-tpse.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-
-# confirm the symlink appeared, then point the config at it
-ls -l /dev/tryx-panorama
-mkdir -p ~/.config/reed-tpse
-echo '{"port":"/dev/tryx-panorama"}' > ~/.config/reed-tpse/config.json
-```
-
-or `cmake .. -DREED_INSTALL_UDEV=ON` (installs to `/etc/udev/rules.d` by
-default -- deliberately not under `CMAKE_INSTALL_PREFIX`, since udev does not
-read `/usr/local/lib/udev/rules.d` and installing there would silently do
-nothing).
-
-`18d1:2d03` is Google's Android Open Accessory VID/PID and is not unique to this
-cooler, so the product string is matched too (`cm01*` -- ours reports `cm01`,
-the SE reports `cm01_se`). Note `uaccess` is seat-based and does not cover a
-system-scope daemon running as a user who is not logged in; keep that account in
-the serial group.
-
-Verified on Ubuntu 24.04 with a Panorama 360 ARGB:
+The device's dispatcher reaches its UI through exactly one interface,
+`IOnPcControlCallBack`. Its methods are the complete set of things an incoming
+command can cause:
 
 ```
-/dev/tryx-panorama -> ttyACM0
-crw-rw----+ root dialout /dev/ttyACM0     # '+' = ACL present
-user:atlance:rw-                          # granted by uaccess
+onConnected  onDisConnect  onReConnect   onRefreshUI    refreshShowData
+onBlockScreen              screenConfigChange           presetConfigChange
+onDoBrightness             onDoPower     onWaterfallModeChange
+onFileUpload               nameTitleChange
 ```
 
-Pinning `port` to the symlink is worth doing beyond surviving renumbering:
-without it the tool auto-detects by opening every `/dev/ttyACM*` in turn and
-handshaking, which means sending frames to unrelated CDC-ACM hardware.
+That list is a useful predictor: an endpoint with no corresponding callback
+cannot do anything however well-formed the payload is.
+
+**`rotate` is "Mirror Mode", and it is not implemented on firmware V1.0.11.**
+The vendor app calls it Mirror Mode -- *"a mirror image of PANORAMA screen for
+users with a left-mounted chassis"* -- and warns that *"PANORAMA water cooling
+will restart upon confirming"*. So it is a persisted setting applied at boot,
+not a live transform, which means the absent callback below is not by itself
+evidence of anything. What settles it is that the firmware carries no
+app-specific mirror implementation and the dispatcher has no reboot path, on
+top of the empirical results. It is dispatched and parsed
+-- `POST rotate {"degree":180}` logs a handler-specific `rotate--180`, which a
+bogus endpoint never produces -- but there is no rotation callback in the
+interface above, no rotate field on the device's `ScreenConfig` entity, and no
+app-specific rotation symbol anywhere in `HomeUI.apk`. Confirmed empirically
+too: Android's own `mRotation` stays `ROTATION_0` across `degree` values of
+0/90/180/270, string and integer forms, alternate field names, and after each of
+the plausible "latches" (a telemetry push, `conn`, and a screen-config
+re-apply). It is therefore not exposed as a command.
+
+`screenFlip` is not a device endpoint at all; the vendor app implements it by
+mapping a boolean onto `rotate`'s `degree`, so it is inert here for the same
+reason.
+
+Nor does the app rotate media host-side before upload: there is no `sharp`
+rotate, no ffmpeg transpose and no EXIF handling anywhere in its main process.
+
+`waterfallMode` and `power` are different -- both have callbacks *and* device
+implementations.
+
+**`waterfallMode`** is a 90° re-layout of the **parameter display**, for people
+who mount the cooler rotated: *"a more reasonable parameter display for users
+who rotate the watercooler by 90 degrees"*. It moves the sysinfo overlay, not
+the media. The firmware carries the implementation
+(`MainActivity.onWaterfallModeChange`, `doWaterfallMode`,
+`changeWaterModelPosition`, `getWaterfallInsets`, `waterfallModePosition`).
+
+**It does nothing on a Panorama 360 ARGB.** Tested properly -- three metrics
+rendered over a black image, so there was a parameter display to move -- the
+layout was pixel-identical before and after, and `MainActivity`'s own
+`--onWaterfallModeChange--` log never fired across seven payload shapes
+(`enable` true/1/"true", `value`, `mode`, `waterfallMode`, `open`). The
+dispatcher accepts the frame and never reaches the handler. The vendor app
+exposes this only on `panoramaSE`, which fits: the firmware is shared, the
+feature is not.
+
+**`power` is a host power-event notification, not a screen switch.** The field
+is `event`, and sending anything else throws `---Exception---No value for event`
+on the device -- which is how the field was found, after seven payload shapes
+built around `enable` had quietly failed. The vocabulary comes from the vendor
+app's own strings:
+
+```
+ac-power  on-battery  shutdown  lock-screen  unlock-screen
+```
+
+KANALI uses it to tell the cooler what the host is doing. Verified on firmware
+V1.0.11 (`--onDoPower--<event>` then `--showStandby--` / `hindStandby` in the
+device log):
+
+| Event | With `sleep-display on` | Effect |
+|---|---|---|
+| `lock-screen` | plays the standby clip | panel leaves the media |
+| `shutdown` | **full black** | panel blanks |
+| `unlock-screen` | -- | hides standby, restores the media |
+
+So `shutdown` and `lock-screen` are not the same despite both logging
+`--showStandby--`: only `shutdown` blanks completely. That makes
+`power {"event":"shutdown"}` plus `sleep-display on` the deterministic way to
+darken the panel at host shutdown, rather than waiting out the ~60s keepalive
+timeout.
+
+⚠ Measuring this needs the serial port held **open**. Every one-shot CLI
+invocation closes the port on exit, and the device treats the following
+reconnect as a wake -- `--onReConnect--` then `hindStandby` -- so the panel
+comes straight back and the command looks inert. Several rounds of "power does
+nothing" were this artefact.
+
+The stats overlays never needed host-side image generation: the device renders
+them itself. The screen config object carries a `sysinfoDisplay` array and a
+`settings{position,color,align,badges}` block, and the host only pushes values.
 
 ## Tested on
 
