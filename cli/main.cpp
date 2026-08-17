@@ -1,3 +1,7 @@
+#include <fcntl.h>
+#include <pwd.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -46,6 +50,8 @@ static void print_usage(const char* prog) {
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
+         "  power <event>           Tell the device the host state:\n"
+         "                          shutdown|lock|unlock|ac|battery\n"
          "  fan [low|mid|high|full] Show LCD fan RPM, or set a named tier\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
@@ -455,6 +461,148 @@ static std::string preset_display_name(const std::string& file_stem) {
   std::string out = file_stem;
   std::replace(out.begin(), out.end(), '_', ' ');
   return out;
+}
+
+// Host power events. Friendly aliases map to the wire vocabulary.
+struct PowerEvent {
+  const char* alias;
+  const char* wire;
+};
+static const PowerEvent kPowerEvents[] = {
+    {"shutdown", "shutdown"},   {"lock", "lock-screen"},
+    {"unlock", "unlock-screen"}, {"ac", "ac-power"},
+    {"battery", "on-battery"},
+};
+
+static const char* lookup_power_event(const std::string& in) {
+  for (const auto& e : kPowerEvents) {
+    if (in == e.alias || in == e.wire) return e.wire;
+  }
+  return nullptr;
+}
+
+// Capture a command's stdout. Fixed argv, no shell -- same reasoning as the
+// adb wrapper.
+static std::string run_capture(const std::vector<std::string>& args) {
+  int fds[2];
+  if (pipe(fds) != 0) return {};
+  const pid_t pid = fork();
+  if (pid < 0) {
+    close(fds[0]);
+    close(fds[1]);
+    return {};
+  }
+  if (pid == 0) {
+    close(fds[0]);
+    dup2(fds[1], STDOUT_FILENO);
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+    close(fds[1]);
+    std::vector<char*> argv;
+    for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+    execvp(argv[0], argv.data());
+    _exit(127);
+  }
+  close(fds[1]);
+  std::string out;
+  char buf[1024];
+  ssize_t n;
+  while ((n = read(fds[0], buf, sizeof(buf))) > 0) out.append(buf, n);
+  close(fds[0]);
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  return out;
+}
+
+static std::string trim_copy(std::string v) {
+  while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' '))
+    v.pop_back();
+  return v;
+}
+
+// The session's lock state via logind. Returns nullopt when it cannot be
+// determined -- a system-scope daemon has no session of its own, so the
+// session is located by user name rather than with `self`.
+static std::optional<bool> session_locked() {
+  const char* user = std::getenv("USER");
+  std::string name = user ? user : "";
+  if (name.empty()) {
+    if (struct passwd* pw = getpwuid(getuid())) name = pw->pw_name;
+  }
+  if (name.empty()) return std::nullopt;
+
+  const std::string sessions = run_capture({"loginctl", "list-sessions", "--no-legend"});
+  std::istringstream ss(sessions);
+  std::string line, sid;
+  while (std::getline(ss, line)) {
+    std::istringstream ls(line);
+    std::string id, uid, who;
+    if (ls >> id >> uid >> who && who == name) {
+      sid = id;
+      break;
+    }
+  }
+  if (sid.empty()) return std::nullopt;
+
+  const std::string hint =
+      trim_copy(run_capture({"loginctl", "show-session", sid, "-p", "LockedHint", "--value"}));
+  if (hint == "yes") return true;
+  if (hint == "no") return false;
+  return std::nullopt;
+}
+
+// True when running on battery. A machine with no power-supply class at all
+// (an ordinary desktop) counts as mains.
+static std::optional<bool> on_battery() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const std::string root = "/sys/class/power_supply";
+  if (!fs::exists(root, ec)) return false;
+  bool saw_mains = false, mains_online = false;
+  for (const auto& e : fs::directory_iterator(root, ec)) {
+    if (ec) break;
+    std::ifstream tf(e.path() / "type");
+    std::string type;
+    if (!(tf >> type) || type != "Mains") continue;
+    saw_mains = true;
+    std::ifstream of(e.path() / "online");
+    int online = 0;
+    if (of >> online && online == 1) mains_online = true;
+  }
+  if (!saw_mains) return false;
+  return !mains_online;
+}
+
+static int cmd_power(const std::string& port, const std::string& arg,
+                     bool verbose) {
+  const char* wire = lookup_power_event(arg);
+  if (!wire) {
+    std::cerr << "Unknown power event: \"" << arg << "\"\n"
+              << "Use: shutdown | lock | unlock | ac | battery\n";
+    return 1;
+  }
+
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+  device.drain();
+
+  if (!device.send_power_event(wire)) {
+    std::cerr << "No response to 'POST power'\n";
+    return 1;
+  }
+
+  std::cout << "Sent power event: " << wire << "\n";
+  if (std::string(wire) == "shutdown" || std::string(wire) == "lock-screen") {
+    std::cout << "  ⚠ The panel wakes again as soon as something reopens the\n"
+                 "    serial port -- the device treats a reconnect as a wake.\n"
+                 "    Stop the daemon first if the panel should stay dark.\n";
+  }
+  return 0;
 }
 
 static int cmd_preset(const std::string& port, const std::vector<std::string>& args,
@@ -1052,6 +1200,9 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     actual_port = *detected;
   }
 
+  const bool power_auto = config && config->power_auto;
+  std::optional<bool> last_locked;
+
   reed::ScreenConfig screen_config;
   screen_config.media = state->media;
   screen_config.ratio = state->ratio;
@@ -1081,6 +1232,15 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     // (which it does at S5) -- so re-apply it on every connect, not just once.
     if (state->display_in_sleep) {
       dev.set_display_in_sleep(*state->display_in_sleep);
+    }
+    if (power_auto) {
+      // Tell the device where the host stands as soon as we are talking to it.
+      if (auto batt = on_battery()) {
+        dev.send_power_event(*batt ? "on-battery" : "ac-power");
+      }
+      if (auto locked = session_locked()) {
+        dev.send_power_event(*locked ? "lock-screen" : "unlock-screen");
+      }
     }
     if (state->fan_tier) {
       if (state->fan_duty) {
@@ -1187,6 +1347,23 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       }
     }
 
+    if (power_auto) {
+      // Cheap enough on the keepalive cadence, and it avoids needing a session
+      // bus -- a system-scope daemon has no session of its own.
+      if (auto locked = session_locked()) {
+        if (!last_locked || *last_locked != *locked) {
+          if (last_locked && device->is_connected()) {
+            device->send_power_event(*locked ? "lock-screen" : "unlock-screen");
+            if (verbose) {
+              std::cerr << "power: session "
+                        << (*locked ? "locked" : "unlocked") << "\n";
+            }
+          }
+          last_locked = *locked;
+        }
+      }
+    }
+
     if (push_telemetry && now >= next_sysinfo) {
       next_sysinfo = now + std::chrono::seconds(state->hud.push_interval_sec);
       // Gate first push on a successful handshake — otherwise startup issues
@@ -1196,6 +1373,14 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
         device->send_sysinfo(build_sysinfo(state->hud.metrics, metrics));
       }
     }
+  }
+
+  // Loop exited, so we were asked to stop -- which during a host shutdown is
+  // the shutdown itself. Say so: with sleep-display enabled the panel blanks
+  // immediately instead of waiting out the ~60s keepalive timeout.
+  if (power_auto && device && device->is_connected()) {
+    device->send_power_event("shutdown");
+    if (verbose) std::cerr << "power: sent shutdown on exit\n";
   }
 
   return 0;
@@ -1537,7 +1722,7 @@ int main(int argc, char* argv[]) {
                        command == "brightness" || command == "status" ||
                        command == "raw" || command == "hud" ||
                        command == "sleep-display" || command == "preset" ||
-                       command == "fan");
+                       command == "fan" || command == "power");
   bool serial_optional = (command == "hud" || command == "preset");
   if (needs_serial && port.empty()) {
     if (verbose) {
@@ -1587,6 +1772,12 @@ int main(int argc, char* argv[]) {
   } else if (command == "fan") {
     return cmd_fan(port, fan_reset, args.empty() ? std::string() : args[0],
                    fan_speed, fan_profile, force, verbose);
+  } else if (command == "power") {
+    if (args.empty()) {
+      std::cerr << "Usage: reed-tpse power <shutdown|lock|unlock|ac|battery>\n";
+      return 1;
+    }
+    return cmd_power(port, args[0], verbose);
   } else if (command == "preset") {
     return cmd_preset(port, args, verbose);
   } else if (command == "upload") {

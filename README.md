@@ -68,7 +68,7 @@ firmware V1.0.11); where something is only inferred, the text says so.
 - [ ] Fan `smartMode` curve values (need a captured vendor payload)
 - [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
 - [x] Firmware presets -- `reed-tpse preset`
-- [ ] `power` host-event command (`event`: shutdown/lock-screen/unlock-screen -- decoded, not yet exposed)
+- [x] `power` host events -- `reed-tpse power`, plus daemon auto mode
 - [ ] `waterfallMode` is SE-only; `rotate` is unimplemented in firmware -- see below
 
 ### What the firmware can actually act on
@@ -250,6 +250,7 @@ reed-tpse display <file>         # Set display content
 reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
+reed-tpse power <event>          # shutdown|lock|unlock|ac|battery
 reed-tpse fan [low|mid|high|full] # LCD fan RPM, or set a tier (--speed N for 0-100)
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
@@ -378,6 +379,49 @@ curve needs a captured vendor payload.
 `fan --profile <file.json>` sends a raw profile but **refuses** any file
 containing non-empty nested curve arrays unless `--force` is passed. A correct
 curve has to come from a capture, not from inference.
+
+### Host power events
+
+```bash
+reed-tpse power shutdown    # blanks the panel (with sleep-display on)
+reed-tpse power lock        # standby clip
+reed-tpse power unlock      # back to the media
+reed-tpse power ac          # host on mains
+reed-tpse power battery     # host on battery
+```
+
+`power` tells the device what the *host* is doing; it is not a screen switch.
+See the endpoint notes above for the wire details.
+
+⚠ The panel wakes again the moment anything reopens the serial port -- the
+device treats a reconnect as a wake (`--onReConnect--` then `hindStandby`). So
+stop the daemon before sending `shutdown` or `lock` if the panel is meant to
+stay dark, or use auto mode below, which sends it from inside the daemon as it
+exits.
+
+#### Auto mode
+
+```json
+// ~/.config/reed-tpse/config.json
+{"port": "/dev/tryx-panorama", "power_auto": true}
+```
+
+With `power_auto`, the daemon mirrors the host state:
+
+- **on connect** -- announces mains/battery and the current lock state
+- **while running** -- watches the session's `LockedHint` via `loginctl` on the
+  keepalive cadence and sends `lock-screen` / `unlock-screen` as it changes
+- **on exit** -- sends `shutdown`
+
+That last one is the useful one. The daemon is stopped as part of the host
+shutting down, so with `sleep-display on` the panel blanks right then, instead
+of waiting out the ~60s keepalive timeout. A boot/shutdown script no longer has
+to hold a keepalive alive to keep the screen from reverting.
+
+Lock state is read with `loginctl` rather than a D-Bus signal because a
+system-scope daemon has no session of its own; the session is located by user
+name. It degrades quietly to doing nothing if logind cannot answer. Off by
+default, since it changes what the panel does without being asked.
 
 ### Presets
 

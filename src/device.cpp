@@ -633,6 +633,12 @@ std::optional<Response> Device::set_display_in_sleep(bool enable) {
   return send_command("POST", "displayInSleep", content);
 }
 
+std::optional<Response> Device::send_power_event(const std::string& event) {
+  picojson::object obj;
+  obj["event"] = picojson::value(event);
+  return send_command("POST", "power", picojson::value(obj).serialize());
+}
+
 std::optional<Response> Device::set_preset(const std::string& id) {
   picojson::object obj;
   obj["id"] = picojson::value(id);

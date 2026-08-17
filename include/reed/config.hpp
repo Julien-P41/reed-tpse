@@ -10,6 +10,10 @@ struct Config {
   std::string port;  // Empty = auto-detect
   int brightness = 75;  //default lower than max setting to reduce burn-in risk on display
   int keepalive_interval = 10;
+  // Have the daemon mirror the host's power state to the device: lock/unlock
+  // as the session locks, and `shutdown` when the daemon is stopped. Opt-in,
+  // since it changes what the panel does without being asked.
+  bool power_auto = false;
 };
 
 struct HudConfig {

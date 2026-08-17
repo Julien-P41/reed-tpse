@@ -122,6 +122,13 @@ class Device {
   // is `enable` and a `value` field is silently ignored.
   std::optional<Response> set_display_in_sleep(bool enable);
 
+  // Tell the device what the host is doing. The field is `event`, not a
+  // boolean -- anything else throws "No value for event" on the device.
+  // Vocabulary: ac-power, on-battery, shutdown, lock-screen, unlock-screen.
+  // `shutdown` blanks the panel outright when displayInSleep is enabled;
+  // `lock-screen` shows the standby clip; `unlock-screen` restores the media.
+  std::optional<Response> send_power_event(const std::string& event);
+
   // Select a firmware-bundled preset. `id` must be "Pre-set <n>: <Name>":
   // the device splits on ": " and loads /system/media/video/<Name>.mp4 with
   // spaces turned into underscores. It does not check the file exists -- a
