@@ -1465,7 +1465,7 @@ int main(int argc, char* argv[]) {
                        command == "raw" || command == "hud" ||
                        command == "sleep-display" || command == "preset" ||
                        command == "fan");
-  bool serial_optional = (command == "hud");
+  bool serial_optional = (command == "hud" || command == "preset");
   if (needs_serial && port.empty()) {
     if (verbose) {
       std::cout << "Auto-detecting device...\n";

@@ -1,62 +1,18 @@
 #include "reed/adb.hpp"
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <iostream>
-#include <memory>
 #include <sstream>
 
 namespace reed {
 
 namespace {
-struct PipeCloser {
-  void operator()(FILE* f) const {
-    if (f) pclose(f);
-  }
-};
-}  // namespace
 
-std::optional<std::string> Adb::run_command(
-    const std::vector<std::string>& args) {
-  std::string cmd = "adb";
-  for (const auto& arg : args) {
-    cmd += " ";
-    // Shell escape
-    if (arg.find(' ') != std::string::npos ||
-        arg.find('\'') != std::string::npos) {
-      cmd += "'";
-      for (char c : arg) {
-        if (c == '\'') {
-          cmd += "'\\''";
-        } else {
-          cmd += c;
-        }
-      }
-      cmd += "'";
-    } else {
-      cmd += arg;
-    }
-  }
-  cmd += " 2>&1";
-
-  std::array<char, 4096> buffer;
-  std::string result;
-
-  std::unique_ptr<FILE, PipeCloser> pipe(popen(cmd.c_str(), "r"));
-  if (!pipe) {
-    return std::nullopt;
-  }
-
-  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-    result += buffer.data();
-  }
-
-  return result;
-}
-
-namespace {
-
-// True if `adb devices` output lists at least one device in state "device".
 bool devices_output_has_device(const std::string& output) {
   std::istringstream iss(output);
   std::string line;
@@ -69,6 +25,71 @@ bool devices_output_has_device(const std::string& output) {
 }
 
 }  // namespace
+
+// Runs adb directly via fork/execvp -- no shell.
+//
+// This used to build a command string and hand it to popen(), quoting an
+// argument only when it contained a space or a single quote. Anything else went
+// through verbatim, so a filename carrying shell metacharacters executed on the
+// host: `reed-tpse delete 'x;touch$IFS/tmp/pwned'` created /tmp/pwned. Media
+// names reach here from `upload` and `delete`, and on the device they come from
+// `ls`, so they are not all operator-controlled.
+//
+// Quoting harder would have worked; not invoking a shell removes the entire
+// class instead. stderr is merged into stdout because callers match on adb's
+// error text ("No such file", "error:").
+std::optional<std::string> Adb::run_command(
+    const std::vector<std::string>& args) {
+  int fds[2];
+  if (pipe(fds) != 0) return std::nullopt;
+
+  const pid_t pid = fork();
+  if (pid < 0) {
+    close(fds[0]);
+    close(fds[1]);
+    return std::nullopt;
+  }
+
+  if (pid == 0) {
+    close(fds[0]);
+    if (dup2(fds[1], STDOUT_FILENO) < 0 || dup2(fds[1], STDERR_FILENO) < 0) {
+      _exit(127);
+    }
+    close(fds[1]);
+
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 2);
+    argv.push_back(const_cast<char*>("adb"));
+    for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+
+    execvp("adb", argv.data());
+    _exit(127);  // adb not on PATH
+  }
+
+  close(fds[1]);
+
+  std::string result;
+  std::array<char, 4096> buffer;
+  ssize_t n;
+  while ((n = read(fds[0], buffer.data(), buffer.size())) > 0) {
+    result.append(buffer.data(), static_cast<size_t>(n));
+  }
+  close(fds[0]);
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+  }
+
+  // execvp failure (adb missing) is the one case worth distinguishing from
+  // "adb ran and complained": callers match on its error text, so a non-zero
+  // exit is still returned as output rather than swallowed.
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 127 && result.empty()) {
+    return std::nullopt;
+  }
+
+  return result;
+}
 
 bool Adb::is_device_connected() {
   auto result = run_command({"devices"});
