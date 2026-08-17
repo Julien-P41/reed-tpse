@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - Upload images, videos, and GIFs (auto-converts to MP4)
 - Set display content and brightness
 - Read device status: fan/pump RPM, health warnings, free storage
-- LCD fan speed control (25/50/75/100% or the firmware curve)
+- LCD fan speed control (named tiers or any duty 0-100%)
 - Black screen instead of the demo loop when the host is off (`sleep-display`)
 - Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
@@ -32,7 +32,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - [ ] Custom overlay layouts (beyond the firmware's 9 anchor points and 3-metric cap)
 - [ ] Network throughput
 - [ ] Screen Splitting mode support (6-metric layout)
-- [x] Fan control -- `reed-tpse fan --speed low|mid|high|full|smart`
+- [x] Fan control -- `reed-tpse fan low|mid|high|full` / `--speed 0-100`
 - [ ] Fan `smartMode` curve values (need a captured vendor payload)
 - [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
 - [x] Firmware presets -- `reed-tpse preset`
@@ -134,7 +134,7 @@ reed-tpse display <file>         # Set display content
 reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
-reed-tpse fan [--speed <tier>]   # LCD fan/pump RPM, or set fan speed
+reed-tpse fan [low|mid|high|full] # LCD fan RPM, or set a tier (--speed N for 0-100)
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
 reed-tpse daemon start           # Start background keepalive
@@ -170,26 +170,34 @@ send `conn`, so it will not disturb what is on screen.
 ### Fan (LCD / pump-head fan)
 
 ```bash
-reed-tpse fan                    # LCD fan and pump RPM
-reed-tpse fan --speed low        # 25% duty
-reed-tpse fan --speed mid        # 50%
-reed-tpse fan --speed high       # 75%
-reed-tpse fan --speed full       # 100%
-reed-tpse fan --speed smart      # hand back to the firmware's own curve
-reed-tpse fan --reset            # same as smart
+reed-tpse fan              # LCD fan RPM
+reed-tpse fan low          # named tiers
+reed-tpse fan mid
+reed-tpse fan high
+reed-tpse fan full
+reed-tpse fan --speed 45   # explicit duty, 0-100, for finer control
+reed-tpse fan --reset      # hand back to the firmware's own curve
 ```
 
-The pump is read-only -- it is driven by the motherboard/BIOS.
+Pump RPM is not repeated here -- `reed-tpse status` reports it, and it is
+driven by the motherboard/BIOS rather than by this tool.
 
-Measured on firmware V1.0.11 (Panorama 360 ARGB):
+The named tiers start at the firmware's own default and climb linearly to
+full. Measured on firmware V1.0.11 (Panorama 360 ARGB):
 
-| `--speed` | `fixedMode` | RPM |
+| Tier | Duty | RPM |
 |---|---|---|
-| low | 25 | ~1500 |
-| mid | 50 | ~2620 |
-| high | 75 | ~3480 |
-| full | 100 | 4170 |
-| smart / reset | -- | ~2040 (firmware default, ≈35%) |
+| `low` | 35% | ~2010 |
+| `mid` | 57% | ~2880 |
+| `high` | 78% | ~3570 |
+| `full` | 100% | 4170 |
+| `--reset` | — | ~2040 (firmware curve) |
+
+`--speed <0-100>` sets any duty directly; the response is monotonic but not
+linear in RPM (45% ≈ 2460, 65% ≈ 3150). The tier *name* sent to the device is
+decorative on this firmware -- with empty curve arrays all four tiers measured
+identical RPM -- so the duty is what actually matters, and `--speed` sends the
+nearest tier name purely so the device's model carries a sensible label.
 
 #### How it actually works
 
@@ -202,8 +210,8 @@ of investigation concluded the fan was not host-controllable:
 Set a profile with no telemetry flowing, or push telemetry without setting a
 profile, and both look inert.
 
-**The payload is flat, not per-tier.** The device's own `FanLCD` model, read
-out of `HomeUI.apk`'s DEX field table, is:
+**The payload is flat, not per-tier.** The device's own `FanLCD` model, read out
+of `HomeUI.apk`'s DEX field table, is:
 
 ```
 speed      String        mode       String
@@ -215,34 +223,32 @@ vendor app's four-tier payload is largely discarded by this firmware. What
 works is:
 
 ```json
-POST fanLCDSet {"speed":"Low Speed","mode":"Fixed Mode","fixedMode":25,"smartMode":[]}
+POST fanLCDSet {"speed":"Low Speed","mode":"Fixed Mode","fixedMode":35,"smartMode":[]}
 ```
 
-⚠ **`fixedMode` is an `int`.** Sending it as an array (an earlier inference
-from the vendor app's chart config read it as `[[tempC, dutyPercent], ...]`)
-coerces to 0 and **stops the fan dead**. It stayed at 0 RPM through every
-telemetry value tried, including an all-100% profile; only an empty-curve
-profile restored it. `fan --profile` refuses nested curve arrays for this
-reason -- see below.
+⚠ **`fixedMode` is an `int`.** Sending it as an array (an earlier inference from
+the vendor app's chart config read it as `[[tempC, dutyPercent], ...]`) coerces
+to 0 and **stops the fan dead**. It stayed at 0 RPM through every telemetry
+value tried, including an all-100% profile; only an empty-curve profile restored
+it. `fan --profile` refuses nested curve arrays for that reason.
 
 **It fails safe.** When telemetry stops arriving the fan returns to 100%, so a
-crashed or stopped daemon leaves the panel over-cooled rather than under-cooled.
-The corollary is that a quiet setting only holds while the daemon is running:
-the daemon re-installs the profile on every connect and pushes telemetry on the
-HUD cadence **even when the HUD is disabled**, precisely so the fan setting
-keeps applying.
+crashed or stopped daemon leaves the panel over-cooled rather than
+under-cooled. The corollary is that a chosen duty only holds while the daemon
+runs: the daemon re-installs the profile on every connect and pushes telemetry
+on the HUD cadence **even when the HUD is disabled**, precisely so the fan
+setting keeps applying.
 
 `smartMode` is a flat `ArrayList` of numbers -- not `[x, y]` pairs; there is no
 curve-point class anywhere in the APK. Its element values are still unknown, so
-`--speed smart` sends it empty, which yields the firmware default. Recovering
-the real curve needs a captured vendor payload.
+`--reset` sends it empty, which yields the firmware default. Recovering the real
+curve needs a captured vendor payload.
 
 #### `--profile` and `--force`
 
-`fan --profile <file>` sends a raw profile but **refuses** any file containing
-non-empty nested curve arrays unless `--force` is passed, because that is the
-shape that stopped the fan. A correct curve has to come from a capture, not
-from inference.
+`fan --profile <file.json>` sends a raw profile but **refuses** any file
+containing non-empty nested curve arrays unless `--force` is passed. A correct
+curve has to come from a capture, not from inference.
 
 ### Presets
 

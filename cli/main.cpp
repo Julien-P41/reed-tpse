@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -44,8 +45,7 @@ static void print_usage(const char* prog) {
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
-         "  fan [--speed <tier>]    Show LCD fan/pump RPM, or set the fan\n"
-         "                          speed: low|mid|high|full|smart\n"
+         "  fan [low|mid|high|full] Show LCD fan RPM, or set a named tier\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
          "  daemon start            Start background daemon\n"
@@ -65,9 +65,10 @@ static void print_usage(const char* prog) {
          "  --json                  Machine-readable output (status)\n"
          "  --watch <seconds>       Poll until interrupted (status)\n"
          "  --system                Act on the system-scope unit (daemon)\n"
-         "  --speed <tier>          Fan speed (fan): low=25% mid=50% "
-         "high=75%\n"
-         "                          full=100% smart=firmware curve\n"
+         "  --speed <0-100>         Fan duty percent (fan), for finer "
+         "control than\n"
+         "                          the named tiers (low=35 mid=57 high=78 "
+         "full=100)\n"
          "  --reset                 Reset the fan profile (fan)\n"
          "  --profile <file>        Send a fan profile (fan); refuses "
          "unvalidated\n"
@@ -547,37 +548,52 @@ static bool profile_has_curve_data(const picojson::value& v) {
   return false;
 }
 
-// The vendor's tier names, mapped to the fixed duty each one means here.
-// Smart Mode hands the fan back to the firmware's own curve: the smartMode
-// array's element values are still unknown, so we send it empty.
+// Named tiers, spanning the useful range: `low` is the firmware's own default
+// (35% -> ~2010 RPM, inside the 2010-2070 band the default itself drifts
+// across) and the rest climb linearly to 100%. Measured on firmware V1.0.11:
+// 35 -> 2010, 57 -> 2850, 78 -> 3570, 100 -> 4170 RPM.
+//
+// The tier name sent on the wire is decorative on this firmware -- with empty
+// curve arrays all four measured identical RPM -- so the duty is what matters.
 struct FanTier {
   const char* alias;
   const char* wire;
-  int duty;  // -1 = Smart Mode
+  int duty;
 };
 static const FanTier kFanTiers[] = {
-    {"low", "Low Speed", 25},
-    {"mid", "Mid Speed", 50},
-    {"high", "High Speed", 75},
+    {"low", "Low Speed", 35},
+    {"mid", "Mid Speed", 57},
+    {"high", "High Speed", 78},
     {"full", "Full Speed", 100},
-    {"smart", "Full Speed", -1},
 };
 
 static const FanTier* lookup_fan_tier(const std::string& in) {
   std::string k;
-  for (char c : in) k += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  for (char c : in) {
+    k += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
   for (const auto& t : kFanTiers) {
     std::string wire;
-    for (char c : std::string(t.wire))
+    for (char c : std::string(t.wire)) {
       wire += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
     if (k == t.alias || k == wire) return &t;
   }
-  if (k == "smart mode") return &kFanTiers[4];
   return nullptr;
 }
 
+// Which tier name to send alongside an arbitrary duty: the nearest one, purely
+// so the device's own model carries a sensible label.
+static const char* nearest_tier_name(int duty) {
+  const FanTier* best = &kFanTiers[0];
+  for (const auto& t : kFanTiers) {
+    if (std::abs(t.duty - duty) < std::abs(best->duty - duty)) best = &t;
+  }
+  return best->wire;
+}
+
 static int cmd_fan(const std::string& port, bool reset,
-                   const std::string& speed,
+                   const std::string& tier_arg, int duty_arg,
                    const std::string& profile_path, bool force, bool verbose) {
   reed::Device device(port, verbose);
   if (!device.connect()) {
@@ -628,45 +644,43 @@ static int cmd_fan(const std::string& port, bool reset,
     return 0;
   }
 
-  if (!speed.empty()) {
-    const FanTier* tier = lookup_fan_tier(speed);
+  // Either a named tier (positional) or an explicit duty via --speed.
+  int duty = -1;
+  std::string wire_tier;
+  if (!tier_arg.empty()) {
+    const FanTier* tier = lookup_fan_tier(tier_arg);
     if (!tier) {
-      std::cerr << "Unknown fan speed: \"" << speed << "\"\n"
-                << "Use one of: low | mid | high | full | smart\n"
-                << "  (or the vendor names \"Low Speed\" ... \"Smart Mode\")\n";
+      std::cerr << "Unknown fan tier: \"" << tier_arg << "\"\n"
+                << "Use: low | mid | high | full   (or --speed <0-100>)\n";
       return 1;
     }
-
-    bool ok;
-    if (tier->duty < 0) {
-      ok = device.set_fan_smart(tier->wire).has_value();
-    } else {
-      ok = device.set_fan_fixed(tier->wire, tier->duty).has_value();
+    duty = tier->duty;
+    wire_tier = tier->wire;
+  } else if (duty_arg >= 0) {
+    if (duty_arg > 100) {
+      std::cerr << "--speed must be 0-100 (got " << duty_arg << ")\n";
+      return 1;
     }
-    if (!ok) {
+    duty = duty_arg;
+    wire_tier = nearest_tier_name(duty);
+  }
+
+  if (duty >= 0) {
+    if (!device.set_fan_fixed(wire_tier, duty)) {
       std::cerr << "No response to 'POST fanLCDSet'\n";
       return 1;
     }
 
     auto state = reed::ConfigManager::load_state();
     if (!state) state = reed::DisplayState{};
-    state->fan_tier = tier->wire;
-    if (tier->duty < 0) {
-      state->fan_duty.reset();
-    } else {
-      state->fan_duty = tier->duty;
-    }
+    state->fan_tier = wire_tier;
+    state->fan_duty = duty;
     reed::ConfigManager::save_state(*state);
 
-    if (tier->duty < 0) {
-      std::cout << "Fan handed back to the firmware's own curve (Smart Mode).\n"
-                << "  The curve values are not known yet, so this is the "
-                   "firmware default (~2040 RPM).\n";
-    } else {
-      std::cout << "Fan set to " << tier->wire << " (" << tier->duty
-                << "% duty).\n";
-      std::cout << "  Measured on firmware V1.0.11: 25%~1530, 50%~2640, "
-                   "75%~3510, 100%~4170 RPM.\n";
+    std::cout << "Fan set to " << duty << "% duty.\n";
+    if (duty == 0) {
+      std::cout << "  ⚠ 0% stops the fan. It cools the panel and SoC, and no "
+                   "temperature is readable.\n";
     }
     std::cout << "  Applies while host telemetry is being pushed -- run the "
                  "daemon.\n";
@@ -691,10 +705,7 @@ static int cmd_fan(const std::string& port, bool reset,
     return 1;
   }
   std::cout << "Fan LCD: " << (status->fan_lcd.empty() ? "-" : status->fan_lcd)
-            << " RPM\n"
-            << "Pump:    "
-            << (status->turbo_pump.empty() ? "-" : status->turbo_pump)
-            << " RPM (BIOS-controlled; read-only)\n";
+            << " RPM\n";
   return 0;
 }
 
@@ -1367,7 +1378,7 @@ int main(int argc, char* argv[]) {
   bool fan_reset = false;
   bool force = false;
   std::string fan_profile;
-  std::string fan_speed;
+  int fan_speed = -1;
   int watch = 0;
   int keepalive_interval = config.keepalive_interval;
 
@@ -1402,7 +1413,7 @@ int main(int argc, char* argv[]) {
     } else if (arg == "--profile") {
       if (++i < argc) fan_profile = argv[i];
     } else if (arg == "--speed") {
-      if (++i < argc) fan_speed = argv[i];
+      if (++i < argc) fan_speed = std::atoi(argv[i]);
     } else if (arg == "--watch") {
       if (++i < argc) watch = std::atoi(argv[i]);
     } else if (arg == "-h" || arg == "--help") {
@@ -1480,7 +1491,8 @@ int main(int argc, char* argv[]) {
     }
     return cmd_sleep_display(port, args[0], verbose);
   } else if (command == "fan") {
-    return cmd_fan(port, fan_reset, fan_speed, fan_profile, force, verbose);
+    return cmd_fan(port, fan_reset, args.empty() ? std::string() : args[0],
+                   fan_speed, fan_profile, force, verbose);
   } else if (command == "preset") {
     return cmd_preset(port, args, verbose);
   } else if (command == "upload") {
