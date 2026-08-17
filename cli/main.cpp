@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -803,13 +804,42 @@ static int cmd_display(const std::string& port,
     return 1;
   }
 
-  // Convert GIF filenames to MP4
+  // `display` takes names of media already on the device. A .gif was converted
+  // to .mp4 at upload time, so the name is rewritten to match -- but nothing
+  // here converts or uploads, so asking for a GIF that was never uploaded used
+  // to reference a file the device does not have. The firmware does not check
+  // either: an unresolvable name simply blanks the panel, which reads as a
+  // display fault. Verify against the device's own listing first.
   std::vector<std::string> media_files;
   for (const auto& f : files) {
     if (reed::Media::detect_type(f) == reed::MediaType::Gif) {
       media_files.push_back(reed::Media::get_converted_name(f));
     } else {
       media_files.push_back(f);
+    }
+  }
+
+  if (reed::Adb::is_device_connected()) {
+    if (auto on_device = reed::Adb::list_media()) {
+      std::vector<std::string> missing;
+      for (const auto& m : media_files) {
+        if (std::find(on_device->begin(), on_device->end(), m) ==
+            on_device->end()) {
+          missing.push_back(m);
+        }
+      }
+      if (!missing.empty()) {
+        for (const auto& m : missing) {
+          std::cerr << "Not on device: " << m << "\n";
+        }
+        std::cerr << "Upload it first (`reed-tpse upload <file>`), or check "
+                     "`reed-tpse list`.\n";
+        if (files.size() != media_files.size() || files != media_files) {
+          std::cerr << "Note: a .gif is stored as .mp4 after upload, so ask "
+                       "for the name shown by `list`.\n";
+        }
+        return 1;
+      }
     }
   }
 

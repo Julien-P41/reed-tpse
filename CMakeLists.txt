@@ -34,6 +34,16 @@ target_compile_options(reed-tpse PRIVATE
     $<$<CONFIG:Debug>:-g -O0>
 )
 
+# Hardware-free checks over the protocol layer. Off by default so the normal
+# build stays a single binary.
+option(REED_BUILD_TESTS "Build the protocol unit tests" OFF)
+if(REED_BUILD_TESTS)
+    add_executable(reed-protocol-test tests/protocol_test.cpp)
+    target_link_libraries(reed-protocol-test PRIVATE reed)
+    enable_testing()
+    add_test(NAME protocol COMMAND reed-protocol-test)
+endif()
+
 install(TARGETS reed-tpse RUNTIME DESTINATION bin)
 install(TARGETS reed
     ARCHIVE DESTINATION lib

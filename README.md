@@ -62,6 +62,7 @@ firmware V1.0.11); where something is only inferred, the text says so.
 - [x] Fan/pump RPM display — `reed-tpse status`
 - [ ] Custom overlay layouts (beyond the firmware's 9 anchor points and 3-metric cap)
 - [ ] Network throughput
+- [x] Frame CRC/length validation + protocol tests
 - [ ] Screen Splitting mode support (6-metric layout)
 - [x] Fan control -- `reed-tpse fan low|mid|high|full` / `--speed 0-100`
 - [ ] Fan `smartMode` curve values (need a captured vendor payload)
@@ -538,6 +539,19 @@ escape = 0x5A -> 0x5B 0x01 ,  0x5B -> 0x5B 0x02
 Opening the port asserts DTR and the device replies with an unprompted info
 frame, so the first read after connecting has to be drained or it is mistaken
 for the answer to the first command.
+
+Incoming frames are validated: the first complete `0x5A..0x5A` frame is taken
+(a single read can return two, and slicing to the end of the buffer parses them
+as one), then the declared length and the checksum are both checked and a
+failing frame is discarded with a message rather than parsed as if valid. That
+is what two daemons sharing the tty used to produce.
+
+```bash
+cmake .. -DREED_BUILD_TESTS=ON && make && ./reed-protocol-test
+```
+
+runs the hardware-free checks over that layer -- real captured frames, plus
+corrupted-CRC, wrong-length, unterminated and two-frames-in-one-buffer cases.
 
 ## Tested on
 

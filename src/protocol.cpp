@@ -1,5 +1,7 @@
 #include "reed/protocol.hpp"
 
+#include <algorithm>
+#include <iostream>
 #include <sstream>
 
 namespace reed {
@@ -107,21 +109,49 @@ std::optional<Response> parse_response(const std::vector<uint8_t>& data) {
     return std::nullopt;
   }
 
-  // Check frame markers
-  if (data.front() != FRAME_MARKER || data.back() != FRAME_MARKER) {
+  // Take the FIRST complete frame, not everything up to the last byte. A read
+  // can return two frames in one buffer, and slicing to the end then parses
+  // them as one. Escaping guarantees 0x5A never occurs inside a payload, so the
+  // next marker after the opening one is this frame's end.
+  auto begin = std::find(data.begin(), data.end(), FRAME_MARKER);
+  if (begin == data.end()) {
     return std::nullopt;
   }
+  auto end = std::find(begin + 1, data.end(), FRAME_MARKER);
+  if (end == data.end()) {
+    return std::nullopt;  // incomplete frame
+  }
 
-  // Unescape payload (between markers)
-  std::vector<uint8_t> payload(data.begin() + 1, data.end() - 1);
+  std::vector<uint8_t> payload(begin + 1, end);
   payload = unescape_data(payload);
 
-  if (payload.size() < 3) {
+  if (payload.size() < 4) {  // 2 length + >=1 message + 1 CRC
     return std::nullopt;
   }
 
-  // Skip length (2 bytes) and CRC (1 byte at end)
-  std::string message(payload.begin() + 2, payload.end() - 1);
+  // Validate the declared length and the checksum. Neither was checked before,
+  // so a corrupted or interleaved frame parsed as if it were valid -- which is
+  // exactly what two daemons sharing the tty produced.
+  const std::string message(payload.begin() + 2, payload.end() - 1);
+  const uint16_t declared_length =
+      static_cast<uint16_t>((payload[0] << 8) | payload[1]);
+  const size_t expected_length = message.size() + 5;
+
+  if (declared_length != expected_length) {
+    std::cerr << "protocol: frame length mismatch (declared " << declared_length
+              << ", got " << expected_length << ") -- discarding frame\n";
+    return std::nullopt;
+  }
+
+  std::vector<uint8_t> crc_input(payload.begin(), payload.end() - 1);
+  const uint8_t expected_crc = calculate_crc(crc_input);
+  if (payload.back() != expected_crc) {
+    std::cerr << "protocol: CRC mismatch (frame 0x" << std::hex
+              << static_cast<int>(payload.back()) << ", computed 0x"
+              << static_cast<int>(expected_crc) << std::dec
+              << ") -- discarding frame\n";
+    return std::nullopt;
+  }
 
   Response response;
   response.raw = message;
