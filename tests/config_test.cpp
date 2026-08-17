@@ -1,0 +1,131 @@
+// Config/state round-trip checks. No hardware required.
+//
+//   cmake .. -DREED_BUILD_TESTS=ON && make && ./reed-config-test
+//
+// These exist because `display` once wrote a fresh DisplayState, silently
+// wiping the HUD config, display_in_sleep and the fan setting that share the
+// file. save_state() truncates, so anything it does not write is lost -- which
+// stays invisible until someone notices their overlay disappeared.
+//
+// Scope: this covers the config layer, not the call site. It verifies that a
+// load -> mutate -> save cycle preserves siblings, i.e. that the pattern
+// `display` now uses is sound. It would NOT catch a caller going back to
+// building a fresh DisplayState; only reading the caller catches that.
+#include "reed/config.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <string>
+
+namespace fs = std::filesystem;
+using reed::ConfigManager;
+using reed::DisplayState;
+
+static int failures = 0;
+
+static void check(const std::string& what, bool ok) {
+  std::printf("  %-52s %s\n", what.c_str(), ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+}
+
+static DisplayState populated() {
+  DisplayState s;
+  s.media = {"a.mp4", "b.png"};
+  s.ratio = "1:1";
+  s.screen_mode = "Screen Splitting";
+  s.play_mode = "Shuffle";
+  s.brightness = 42;
+  s.display_in_sleep = true;
+  s.preset = "Cyber Bunker";
+  s.fan_tier = "Mid Speed";
+  s.fan_duty = 57;
+  s.hud.enabled = true;
+  s.hud.metrics = {"CPU Temperature", "Date&Time"};
+  s.hud.position = "Bottom";
+  s.hud.align = "Right";
+  s.hud.color = "#00FF00";
+  s.hud.badges = {"CPU Badge"};
+  s.hud.push_interval_sec = 9;
+  s.hud.temperature_unit = "Fahrenheit";
+  s.hud.cpu_name = "Test CPU";
+  s.hud.gpu_name = "Test GPU";
+  return s;
+}
+
+int main() {
+  const fs::path tmp = fs::temp_directory_path() / "reed-config-test";
+  fs::remove_all(tmp);
+  fs::create_directories(tmp);
+  ::setenv("XDG_STATE_HOME", tmp.c_str(), 1);
+
+  std::puts("state round-trip:");
+  const DisplayState in = populated();
+  check("save_state succeeds", ConfigManager::save_state(in));
+
+  auto out = ConfigManager::load_state();
+  check("load_state returns a value", out.has_value());
+  if (!out) return 1;
+
+  check("media", out->media == in.media);
+  check("ratio", out->ratio == in.ratio);
+  check("screen_mode", out->screen_mode == in.screen_mode);
+  check("play_mode", out->play_mode == in.play_mode);
+  check("brightness", out->brightness == in.brightness);
+  check("display_in_sleep", out->display_in_sleep == in.display_in_sleep);
+  check("preset", out->preset == in.preset);
+  check("fan_tier", out->fan_tier == in.fan_tier);
+  check("fan_duty", out->fan_duty == in.fan_duty);
+  check("hud.enabled", out->hud.enabled == in.hud.enabled);
+  check("hud.metrics", out->hud.metrics == in.hud.metrics);
+  check("hud.position", out->hud.position == in.hud.position);
+  check("hud.align", out->hud.align == in.hud.align);
+  check("hud.color", out->hud.color == in.hud.color);
+  check("hud.badges", out->hud.badges == in.hud.badges);
+  check("hud.push_interval_sec",
+        out->hud.push_interval_sec == in.hud.push_interval_sec);
+  check("hud.temperature_unit",
+        out->hud.temperature_unit == in.hud.temperature_unit);
+  check("hud.cpu_name", out->hud.cpu_name == in.hud.cpu_name);
+  check("hud.gpu_name", out->hud.gpu_name == in.hud.gpu_name);
+
+  std::puts("unset optionals stay unset:");
+  DisplayState bare;
+  bare.media = {"only.mp4"};
+  ConfigManager::save_state(bare);
+  auto reread = ConfigManager::load_state();
+  check("display_in_sleep absent", reread && !reread->display_in_sleep);
+  check("preset absent", reread && !reread->preset);
+  check("fan_duty absent", reread && !reread->fan_duty);
+
+  std::puts("load-mutate-save preserves siblings:");
+  ConfigManager::save_state(in);
+  auto edited = ConfigManager::load_state();
+  if (edited) {
+    edited->media = {"new.mp4"};  // what `display` changes
+    ConfigManager::save_state(*edited);
+  }
+  auto after = ConfigManager::load_state();
+  check("media updated", after && after->media == std::vector<std::string>{"new.mp4"});
+  check("hud survived", after && after->hud.enabled &&
+                            after->hud.metrics == in.hud.metrics);
+  check("fan survived", after && after->fan_duty == in.fan_duty);
+  check("display_in_sleep survived",
+        after && after->display_in_sleep == in.display_in_sleep);
+  check("preset survived", after && after->preset == in.preset);
+
+  std::puts("false is distinguishable from unset:");
+  DisplayState off;
+  off.media = {"x.mp4"};
+  off.display_in_sleep = false;
+  ConfigManager::save_state(off);
+  auto off_read = ConfigManager::load_state();
+  check("display_in_sleep=false round-trips",
+        off_read && off_read->display_in_sleep.has_value() &&
+            *off_read->display_in_sleep == false);
+
+  fs::remove_all(tmp);
+  std::printf("%s\n", failures ? "FAILURES" : "all checks passed");
+  return failures != 0;
+}

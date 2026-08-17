@@ -34,14 +34,27 @@ target_compile_options(reed-tpse PRIVATE
     $<$<CONFIG:Debug>:-g -O0>
 )
 
+# udev rule. Not installed under CMAKE_INSTALL_PREFIX, because udev does not
+# read /usr/local/lib/udev/rules.d -- installing there would look successful and
+# do nothing. The destination is therefore explicit.
+option(REED_INSTALL_UDEV "Install the udev rule" OFF)
+set(REED_UDEV_DIR "/etc/udev/rules.d" CACHE PATH "Where to install the udev rule")
+if(REED_INSTALL_UDEV)
+    install(FILES udev/71-reed-tpse.rules DESTINATION ${REED_UDEV_DIR})
+    message(STATUS "udev rule will be installed to ${REED_UDEV_DIR}")
+endif()
+
 # Hardware-free checks over the protocol layer. Off by default so the normal
 # build stays a single binary.
 option(REED_BUILD_TESTS "Build the protocol unit tests" OFF)
 if(REED_BUILD_TESTS)
     add_executable(reed-protocol-test tests/protocol_test.cpp)
     target_link_libraries(reed-protocol-test PRIVATE reed)
+    add_executable(reed-config-test tests/config_test.cpp)
+    target_link_libraries(reed-config-test PRIVATE reed)
     enable_testing()
     add_test(NAME protocol COMMAND reed-protocol-test)
+    add_test(NAME config COMMAND reed-config-test)
 endif()
 
 install(TARGETS reed-tpse RUNTIME DESTINATION bin)

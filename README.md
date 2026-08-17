@@ -550,8 +550,35 @@ is what two daemons sharing the tty used to produce.
 cmake .. -DREED_BUILD_TESTS=ON && make && ./reed-protocol-test
 ```
 
-runs the hardware-free checks over that layer -- real captured frames, plus
-corrupted-CRC, wrong-length, unterminated and two-frames-in-one-buffer cases.
+runs the hardware-free checks: `reed-protocol-test` covers framing (real
+captured frames, plus corrupted-CRC, wrong-length, unterminated and
+two-frames-in-one-buffer cases), and `reed-config-test` covers the config/state
+round-trip -- every field, optionals staying unset, `false` being
+distinguishable from unset, and a load/mutate/save cycle preserving the
+settings that share the state file.
+
+## udev rule
+
+`udev/71-reed-tpse.rules` grants the device to the logged-in user and, more
+usefully, creates a stable `/dev/tryx-panorama` symlink so re-enumeration
+(`ttyACM0` becoming `ttyACM1` after a USB suspend) stops mattering:
+
+```bash
+sudo cp udev/71-reed-tpse.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+echo '{"port":"/dev/tryx-panorama"}' > ~/.config/reed-tpse/config.json
+```
+
+or `cmake .. -DREED_INSTALL_UDEV=ON` (installs to `/etc/udev/rules.d` by
+default -- deliberately not under `CMAKE_INSTALL_PREFIX`, since udev does not
+read `/usr/local/lib/udev/rules.d` and installing there would silently do
+nothing).
+
+`18d1:2d03` is Google's Android Open Accessory VID/PID and is not unique to this
+cooler, so the product string is matched too (`cm01*` -- ours reports `cm01`,
+the SE reports `cm01_se`). Note `uaccess` is seat-based and does not cover a
+system-scope daemon running as a user who is not logged in; keep that account in
+the serial group.
 
 ## Tested on
 

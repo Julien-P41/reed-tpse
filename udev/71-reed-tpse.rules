@@ -1,0 +1,33 @@
+# Tryx Panorama AIO display — udev rules
+#
+# Install:
+#   sudo cp udev/71-reed-tpse.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# 18d1:2d03 is Google's Android Open Accessory VID/PID and is NOT unique to
+# this cooler, so the product string is matched too. Ours reports `cm01`; the
+# Panorama SE reports `cm01_se`, hence the glob.
+#
+# TAG+="uaccess" grants the device to whoever is logged in at the active seat,
+# which covers interactive use with no group membership.
+#
+# ⚠ uaccess is seat-based, so it does NOT cover a system-scope daemon running
+# as a user who is not logged in (a headless boot). For that, keep the service
+# account in the serial group — `dialout` on Debian/Ubuntu, `uucp` on Arch —
+# which is what the GROUP line below assumes. Change or drop it to match your
+# distro; an unknown group makes udev log an error and skip the assignment.
+#
+# The SYMLINK is the part worth having either way: /dev/tryx-panorama is stable
+# across re-enumeration, so `/dev/ttyACM0` becoming `ttyACM1` after a USB
+# suspend no longer matters. Point the config at it:
+#
+#   ~/.config/reed-tpse/config.json  ->  {"port": "/dev/tryx-panorama"}
+
+# CDC-ACM serial interface — display, brightness, fan, status
+SUBSYSTEM=="tty", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d03", \
+    ATTRS{product}=="cm01*", TAG+="uaccess", GROUP="dialout", MODE="0660", \
+    SYMLINK+="tryx-panorama"
+
+# USB device node — adb media transfer
+SUBSYSTEM=="usb", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d03", \
+    ATTRS{product}=="cm01*", TAG+="uaccess", GROUP="dialout", MODE="0660"
