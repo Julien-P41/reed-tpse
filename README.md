@@ -86,7 +86,14 @@ onFileUpload               nameTitleChange
 That list is a useful predictor: an endpoint with no corresponding callback
 cannot do anything however well-formed the payload is.
 
-**`rotate` is not implemented on firmware V1.0.11.** It is dispatched and parsed
+**`rotate` is "Mirror Mode", and it is not implemented on firmware V1.0.11.**
+The vendor app calls it Mirror Mode -- *"a mirror image of PANORAMA screen for
+users with a left-mounted chassis"* -- and warns that *"PANORAMA water cooling
+will restart upon confirming"*. So it is a persisted setting applied at boot,
+not a live transform, which means the absent callback below is not by itself
+evidence of anything. What settles it is that the firmware carries no
+app-specific mirror implementation and the dispatcher has no reboot path, on
+top of the empirical results. It is dispatched and parsed
 -- `POST rotate {"degree":180}` logs a handler-specific `rotate--180`, which a
 bogus endpoint never produces -- but there is no rotation callback in the
 interface above, no rotate field on the device's `ScreenConfig` entity, and no
@@ -100,10 +107,24 @@ re-apply). It is therefore not exposed as a command.
 mapping a boolean onto `rotate`'s `degree`, so it is inert here for the same
 reason.
 
-`waterfallMode` and `power` *do* have callbacks, so unlike `rotate` they are
-worth pursuing. `waterfallMode` reaches the dispatcher but showed no observable
-change in a plain full-screen media configuration; it likely needs a particular
-screen mode or preset context.
+Nor does the app rotate media host-side before upload: there is no `sharp`
+rotate, no ffmpeg transpose and no EXIF handling anywhere in its main process.
+
+`waterfallMode` and `power` are different -- both have callbacks *and* device
+implementations.
+
+**`waterfallMode`** is a 90° re-layout of the **parameter display**, for people
+who mount the cooler rotated: *"a more reasonable parameter display for users
+who rotate the watercooler by 90 degrees"*. The firmware implements it
+(`MainActivity.onWaterfallModeChange`, `doWaterfallMode`,
+`changeWaterModelPosition`, `getWaterfallInsets`, `waterfallModePosition`). It
+moves the sysinfo overlay, not the media -- so with no HUD metrics active there
+is nothing for it to move, which is why a naive test looks inert. The app only
+exposes it on the SE.
+
+**`power`** is the plain "Screen" on/off toggle in the app's UI. The firmware
+has `doPower`/`setPower` alongside `standbyVideo`, the standby clip behind
+`displayInSleep`.
 
 The stats overlays never needed host-side image generation: the device renders
 them itself. The screen config object carries a `sysinfoDisplay` array and a
