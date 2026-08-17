@@ -968,6 +968,22 @@ static std::string systemctl(bool system_scope) {
   return system_scope ? "systemctl" : "systemctl --user";
 }
 
+// First run has no saved state. Rather than refuse, seed the playlist from
+// whatever media is already on the device. Idea taken from
+// xiaotinglian/reed-tpse (bootstrap_display_state).
+static std::optional<reed::DisplayState> bootstrap_display_state(
+    int brightness) {
+  if (!reed::Adb::is_device_connected()) return std::nullopt;
+  auto media = reed::Adb::list_media();
+  if (!media || media->empty()) return std::nullopt;
+
+  reed::DisplayState state;
+  state.media = *media;
+  state.brightness = brightness;
+  reed::ConfigManager::save_state(state);
+  return state;
+}
+
 static int cmd_daemon_start(const std::string& port, bool foreground,
                             bool system_scope, bool verbose) {
   if (!foreground) {
@@ -991,17 +1007,38 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   }
 
   // Foreground daemon mode
+  auto config = reed::ConfigManager::load_config();
+
   auto state = reed::ConfigManager::load_state();
-  if (!state || state->media.empty()) {
-    std::cerr
-        << "No display state saved. Run 'reed-tpse display <file>' first.\n";
-    return 1;
+  if (!state) {
+    state = bootstrap_display_state(config ? config->brightness : 75);
+  }
+  if (!state) {
+    // Still nothing: carry on anyway. Exiting non-zero here put the unit into a
+    // 5s Restart=on-failure loop on every fresh install, and the daemon is
+    // useful without media -- it is what stops the panel reverting to firmware
+    // content, and it applies the fan and sleep settings.
+    std::cerr << "No saved display state; running keepalive only. "
+                 "Set content with `reed-tpse display <file>` or "
+                 "`reed-tpse preset <name>`.\n";
+    state = reed::DisplayState{};
   }
 
-  auto config = reed::ConfigManager::load_config();
   std::string actual_port =
       (config && !config->port.empty()) ? config->port : port;
   int keepalive_interval = config ? config->keepalive_interval : 10;
+  // A zero or negative interval spins the loop; an absurd one is a typo. The
+  // device reverts after ~60s without a handshake, so cap well under that.
+  if (keepalive_interval < 1 || keepalive_interval > 55) {
+    std::cerr << "keepalive_interval " << keepalive_interval
+              << " out of range (1-55), using 10\n";
+    keepalive_interval = 10;
+  }
+  if (state->hud.push_interval_sec < 1 || state->hud.push_interval_sec > 3600) {
+    std::cerr << "hud push interval " << state->hud.push_interval_sec
+              << " out of range (1-3600), using 5\n";
+    state->hud.push_interval_sec = 5;
+  }
 
   // Only the foreground daemon needs the device, so it does its own detection
   // rather than making every `daemon` subcommand depend on a free port.
@@ -1054,7 +1091,7 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     }
     if (state->preset) {
       dev.set_preset("Pre-set 1: " + *state->preset);
-    } else {
+    } else if (!screen_config.media.empty()) {
       dev.set_screen_config(screen_config);
     }
     dev.set_brightness(state->brightness);
@@ -1067,6 +1104,12 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     std::cout << "Display restored with HUD (" << state->hud.metrics.size()
               << " metric" << (state->hud.metrics.size() == 1 ? "" : "s")
               << ", push every " << state->hud.push_interval_sec << "s).\n";
+  } else if (state->preset) {
+    std::cout << "Preset restored (" << *state->preset
+              << "). Running keepalive...\n";
+  } else if (screen_config.media.empty()) {
+    // Nothing was restored -- saying otherwise sent me chasing a phantom.
+    std::cout << "Running keepalive only (no media configured).\n";
   } else {
     std::cout << "Display restored. Running keepalive...\n";
   }
