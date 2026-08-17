@@ -564,8 +564,13 @@ usefully, creates a stable `/dev/tryx-panorama` symlink so re-enumeration
 (`ttyACM0` becoming `ttyACM1` after a USB suspend) stops mattering:
 
 ```bash
+cd ~/reed-tpse          # repo root -- `make install` leaves you in build/
 sudo cp udev/71-reed-tpse.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# confirm the symlink appeared, then point the config at it
+ls -l /dev/tryx-panorama
+mkdir -p ~/.config/reed-tpse
 echo '{"port":"/dev/tryx-panorama"}' > ~/.config/reed-tpse/config.json
 ```
 
