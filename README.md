@@ -585,6 +585,18 @@ the SE reports `cm01_se`). Note `uaccess` is seat-based and does not cover a
 system-scope daemon running as a user who is not logged in; keep that account in
 the serial group.
 
+Verified on Ubuntu 24.04 with a Panorama 360 ARGB:
+
+```
+/dev/tryx-panorama -> ttyACM0
+crw-rw----+ root dialout /dev/ttyACM0     # '+' = ACL present
+user:atlance:rw-                          # granted by uaccess
+```
+
+Pinning `port` to the symlink is worth doing beyond surviving renumbering:
+without it the tool auto-detects by opening every `/dev/ttyACM*` in turn and
+handshaking, which means sending frames to unrelated CDC-ACM hardware.
+
 ## Tested on
 
 | Distro | Kernel | CPU | GPU | Contributor |
