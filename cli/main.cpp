@@ -1281,10 +1281,24 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     actual_port = *detected;
   }
 
-  const bool power_auto = config && config->power_auto;
+  bool power_auto = config && config->power_auto;
   std::optional<bool> last_locked;
 
   reed::ScreenConfig screen_config;
+  auto rebuild_screen_config = [&]() {
+    screen_config = reed::ScreenConfig{};
+    screen_config.media = state->media;
+    screen_config.ratio = state->ratio;
+    screen_config.screen_mode = state->screen_mode;
+    screen_config.play_mode = state->play_mode;
+    if (state->hud.enabled) {
+      screen_config.sysinfo_display = state->hud.metrics;
+      screen_config.settings.position = state->hud.position;
+      screen_config.settings.align = state->hud.align;
+      screen_config.settings.color = state->hud.color;
+      screen_config.settings.badges = state->hud.badges;
+    }
+  };
   screen_config.media = state->media;
   screen_config.ratio = state->ratio;
   screen_config.screen_mode = state->screen_mode;
@@ -1397,15 +1411,45 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   // Telemetry is needed for the HUD *and* for a fixed fan duty -- the device
   // only honours the fan profile while host data keeps arriving, and reverts
   // to 100% when it stops. Schedule pushes if either wants them.
-  const bool push_telemetry =
+  bool push_telemetry =
       state->hud.enabled || state->fan_duty.has_value();
   auto next_sysinfo =
       push_telemetry
           ? now + std::chrono::seconds(state->hud.push_interval_sec)
           : clock::time_point::max();
 
+  // Settings can change while the daemon runs -- `lock-display` needs no
+  // serial port, so it can be edited with the daemon up, and a startup
+  // snapshot then silently serves stale values. Reload when either file's
+  // mtime moves.
+  auto mtime_of = [](const std::string& path) -> long long {
+    std::error_code ec;
+    auto t = std::filesystem::last_write_time(path, ec);
+    if (ec) return 0;
+    return static_cast<long long>(t.time_since_epoch().count());
+  };
+  const std::string cfg_path = reed::ConfigManager::get_config_path();
+  const std::string state_path = reed::ConfigManager::get_state_path();
+  long long cfg_seen = mtime_of(cfg_path);
+  long long state_seen = mtime_of(state_path);
+
   int failures = 0;
   while (g_running) {
+    const long long cfg_now = mtime_of(cfg_path);
+    const long long state_now = mtime_of(state_path);
+    if (cfg_now != cfg_seen || state_now != state_seen) {
+      cfg_seen = cfg_now;
+      state_seen = state_now;
+      if (auto c = reed::ConfigManager::load_config()) config = c;
+      if (auto st = reed::ConfigManager::load_state()) {
+        state = st;
+        rebuild_screen_config();
+      }
+      power_auto = config && config->power_auto;
+      push_telemetry = state->hud.enabled || state->fan_duty.has_value();
+      if (verbose) std::cerr << "settings reloaded\n";
+    }
+
     // Tick once a second so we're responsive to both cadences and SIGTERM.
     std::this_thread::sleep_for(std::chrono::seconds(1));
     if (!g_running) break;

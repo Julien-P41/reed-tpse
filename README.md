@@ -379,6 +379,11 @@ reed-tpse lock-display                              # show the current setting
 reed-tpse lock-display --default                    # back to the standby clip
 ```
 
+The daemon re-reads `config.json` and the state file whenever either changes,
+so `lock-display` takes effect on a running daemon without a restart. (It has
+to: `lock-display` needs no serial port, so it is editable while the daemon
+holds the device.)
+
 The setting lives in `config.json` alongside `power_auto`, not in the state
 file -- `display` rewrites the state file, and this is configuration rather
 than runtime state.
