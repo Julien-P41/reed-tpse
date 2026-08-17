@@ -68,7 +68,8 @@ firmware V1.0.11); where something is only inferred, the text says so.
 - [ ] Fan `smartMode` curve values (need a captured vendor payload)
 - [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
 - [x] Firmware presets -- `reed-tpse preset`
-- [ ] Screen behaviour: `waterfallMode`, `power` (`rotate` is unimplemented in firmware -- see below)
+- [ ] `power` host-event command (`event`: shutdown/lock-screen/unlock-screen -- decoded, not yet exposed)
+- [ ] `waterfallMode` is SE-only; `rotate` is unimplemented in firmware -- see below
 
 ### What the firmware can actually act on
 
@@ -129,9 +130,37 @@ dispatcher accepts the frame and never reaches the handler. The vendor app
 exposes this only on `panoramaSE`, which fits: the firmware is shared, the
 feature is not.
 
-**`power`** is the plain "Screen" on/off toggle in the app's UI. The firmware
-has `doPower`/`setPower` alongside `standbyVideo`, the standby clip behind
-`displayInSleep`.
+**`power` is a host power-event notification, not a screen switch.** The field
+is `event`, and sending anything else throws `---Exception---No value for event`
+on the device -- which is how the field was found, after seven payload shapes
+built around `enable` had quietly failed. The vocabulary comes from the vendor
+app's own strings:
+
+```
+ac-power  on-battery  shutdown  lock-screen  unlock-screen
+```
+
+KANALI uses it to tell the cooler what the host is doing. Verified on firmware
+V1.0.11 (`--onDoPower--<event>` then `--showStandby--` / `hindStandby` in the
+device log):
+
+| Event | With `sleep-display on` | Effect |
+|---|---|---|
+| `lock-screen` | plays the standby clip | panel leaves the media |
+| `shutdown` | **full black** | panel blanks |
+| `unlock-screen` | -- | hides standby, restores the media |
+
+So `shutdown` and `lock-screen` are not the same despite both logging
+`--showStandby--`: only `shutdown` blanks completely. That makes
+`power {"event":"shutdown"}` plus `sleep-display on` the deterministic way to
+darken the panel at host shutdown, rather than waiting out the ~60s keepalive
+timeout.
+
+⚠ Measuring this needs the serial port held **open**. Every one-shot CLI
+invocation closes the port on exit, and the device treats the following
+reconnect as a wake -- `--onReConnect--` then `hindStandby` -- so the panel
+comes straight back and the command looks inert. Several rounds of "power does
+nothing" were this artefact.
 
 The stats overlays never needed host-side image generation: the device renders
 them itself. The screen config object carries a `sysinfoDisplay` array and a
@@ -401,11 +430,16 @@ animation.
 Verified on firmware V1.0.11 by measuring the panel's mean luminance over adb
 `screencap`, 150s after the last handshake:
 
-| `displayInSleep` | Panel |
+| `displayInSleep` | Panel after the keepalive timeout |
 |---|---|
 | `{"enable":true}`  | black (luminance 0) |
 | `{"enable":false}` | sleep animation (luminance ~58-63) |
 | `{"value":true}`   | silently ignored -- behaves as disabled |
+
+⚠ That table describes the **keepalive-timeout** path only. `displayInSleep`
+does not blank everything: with it enabled, a `power {"event":"lock-screen"}`
+still rolls the standby clip, while `power {"event":"shutdown"}` goes fully
+black. The two paths are separate.
 
 So the payload field is `enable`; `value` is not read. Note the endpoint
 returns `200` with an empty body for *any* payload, including a nonsense
