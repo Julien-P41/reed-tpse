@@ -50,6 +50,8 @@ static void print_usage(const char* prog) {
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
+         "  lock-display <file>     Show <file> while the session is locked\n"
+         "                          (--default restores the standby clip)\n"
          "  power <event>           Tell the device the host state:\n"
          "                          shutdown|lock|unlock|ac|battery\n"
          "  fan [low|mid|high|full] Show LCD fan RPM, or set a named tier\n"
@@ -573,6 +575,85 @@ static std::optional<bool> on_battery() {
   }
   if (!saw_mains) return false;
   return !mains_online;
+}
+
+// Media shown while the session is locked, replacing the firmware's standby
+// clip. Only meaningful with power_auto, which is what notices the lock.
+static int cmd_lock_display(const std::string& port, const std::vector<std::string>& args,
+                            int brightness, bool brightness_given, bool verbose) {
+  (void)port;
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+
+  if (args.empty()) {
+    if (state->lock_media) {
+      std::cout << "Lock display: " << *state->lock_media << " at "
+                << state->lock_brightness << "% brightness\n";
+    } else {
+      std::cout << "Lock display: (firmware standby clip)\n";
+    }
+    std::cout << "  Applies when the daemon is running with \"power_auto\": "
+                 "true.\n";
+    return 0;
+  }
+
+  const std::string& arg = args[0];
+  if (arg == "--default" || arg == "--remove" || arg == "default") {
+    state->lock_media.reset();
+    if (!reed::ConfigManager::save_state(*state)) {
+      std::cerr << "Failed to save state\n";
+      return 1;
+    }
+    std::cout << "Lock display reset to the firmware standby clip.\n"
+              << "  The daemon will send the lock-screen power event again.\n";
+    return 0;
+  }
+
+  // Same rule as `display`: a .gif is stored as .mp4 once uploaded.
+  std::string media = arg;
+  if (reed::Media::detect_type(media) == reed::MediaType::Gif) {
+    media = reed::Media::get_converted_name(media);
+  }
+
+  if (reed::Adb::is_device_connected()) {
+    if (auto on_device = reed::Adb::list_media()) {
+      if (std::find(on_device->begin(), on_device->end(), media) ==
+          on_device->end()) {
+        std::cerr << "Not on device: " << media << "\n"
+                  << "Upload it first (`reed-tpse upload <file>`), or check "
+                     "`reed-tpse list`.\n";
+        return 1;
+      }
+    }
+  }
+
+  const int level = brightness_given ? brightness : state->lock_brightness;
+  if (level < 0 || level > 100) {
+    std::cerr << "Brightness must be 0-100\n";
+    return 1;
+  }
+
+  state->lock_media = media;
+  state->lock_brightness = level;
+  if (!reed::ConfigManager::save_state(*state)) {
+    std::cerr << "Failed to save state\n";
+    return 1;
+  }
+
+  std::cout << "Lock display: " << media << " at " << level << "% brightness\n";
+  if (level > 50) {
+    // A locked machine sits untouched for hours, which is the worst case for
+    // an AMOLED: bright, and often near-static.
+    std::cout << "  ⚠ " << level
+              << "% is bright for a screen that may sit locked for hours.\n"
+                 "    This panel is AMOLED, so a bright near-static image is "
+                 "the burn-in case.\n"
+                 "    Consider --brightness 40 or lower, and a dark clip.\n";
+  }
+  std::cout << "  Applies when the daemon is running with \"power_auto\": "
+               "true.\n";
+  if (verbose) std::cout << "  (saved to " << reed::ConfigManager::get_state_path() << ")\n";
+  return 0;
 }
 
 static int cmd_power(const std::string& port, const std::string& arg,
@@ -1353,10 +1434,29 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       if (auto locked = session_locked()) {
         if (!last_locked || *last_locked != *locked) {
           if (last_locked && device->is_connected()) {
-            device->send_power_event(*locked ? "lock-screen" : "unlock-screen");
+            if (state->lock_media) {
+              // A custom lock screen replaces the firmware standby rather than
+              // layering on it: sending the power event and then setting media
+              // would immediately wake the panel again (hindStandby).
+              if (*locked) {
+                reed::ScreenConfig lock_cfg = screen_config;
+                lock_cfg.media = {*state->lock_media};
+                lock_cfg.sysinfo_display.clear();
+                device->set_screen_config(lock_cfg);
+                device->set_brightness(state->lock_brightness);
+              } else {
+                device->set_screen_config(screen_config);
+                device->set_brightness(state->brightness);
+              }
+            } else {
+              device->send_power_event(*locked ? "lock-screen"
+                                               : "unlock-screen");
+            }
             if (verbose) {
               std::cerr << "power: session "
-                        << (*locked ? "locked" : "unlocked") << "\n";
+                        << (*locked ? "locked" : "unlocked")
+                        << (state->lock_media ? " (custom lock media)" : "")
+                        << "\n";
             }
           }
           last_locked = *locked;
@@ -1653,6 +1753,7 @@ int main(int argc, char* argv[]) {
   bool keepalive = false;
   bool foreground = false;
   bool json_output = false;
+  bool brightness_given = false;
   bool system_scope = false;
   bool fan_reset = false;
   bool force = false;
@@ -1676,7 +1777,10 @@ int main(int argc, char* argv[]) {
     } else if (arg == "--ratio") {
       if (++i < argc) ratio = argv[i];
     } else if (arg == "--brightness") {
-      if (++i < argc) brightness = std::atoi(argv[i]);
+      if (++i < argc) {
+        brightness = std::atoi(argv[i]);
+        brightness_given = true;
+      }
     } else if (arg == "--keepalive") {
       keepalive = true;
     } else if (arg == "--foreground") {
@@ -1772,6 +1876,8 @@ int main(int argc, char* argv[]) {
   } else if (command == "fan") {
     return cmd_fan(port, fan_reset, args.empty() ? std::string() : args[0],
                    fan_speed, fan_profile, force, verbose);
+  } else if (command == "lock-display") {
+    return cmd_lock_display(port, args, brightness, brightness_given, verbose);
   } else if (command == "power") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse power <shutdown|lock|unlock|ac|battery>\n";

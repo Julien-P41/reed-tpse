@@ -197,6 +197,12 @@ std::optional<DisplayState> ConfigManager::load_state() {
   }
 
   {
+    const std::string lm = get_string(json, "lock_media", "");
+    if (!lm.empty()) state.lock_media = lm;
+    state.lock_brightness = get_int(json, "lock_brightness", state.lock_brightness);
+  }
+
+  {
     const std::string t = get_string(json, "fan_tier", "");
     if (!t.empty()) state.fan_tier = t;
     if (json.is<picojson::object>() &&
@@ -252,6 +258,11 @@ bool ConfigManager::save_state(const DisplayState& state) {
   }
   if (state.preset) {
     obj["preset"] = picojson::value(*state.preset);
+  }
+  if (state.lock_media) {
+    obj["lock_media"] = picojson::value(*state.lock_media);
+    obj["lock_brightness"] =
+        picojson::value(static_cast<double>(state.lock_brightness));
   }
   if (state.fan_tier) {
     obj["fan_tier"] = picojson::value(*state.fan_tier);

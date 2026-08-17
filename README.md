@@ -202,6 +202,7 @@ reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
 reed-tpse power <event>          # shutdown|lock|unlock|ac|battery
+reed-tpse lock-display <file>    # custom screen while the session is locked
 reed-tpse fan [low|mid|high|full] # LCD fan RPM, or set a tier (--speed N for 0-100)
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
@@ -369,6 +370,32 @@ That last one is the useful one. The daemon is stopped as part of the host
 shutting down, so with `sleep-display on` the panel blanks right then, instead
 of waiting out the ~60s keepalive timeout. A boot/shutdown script no longer has
 to hold a keepalive alive to keep the screen from reverting.
+
+#### A custom lock screen
+
+```bash
+reed-tpse lock-display sunset.mp4 --brightness 40   # shown while locked
+reed-tpse lock-display                              # show the current setting
+reed-tpse lock-display --default                    # back to the standby clip
+```
+
+With `lock_media` set, the daemon swaps the panel to that media on lock and
+back to your normal media on unlock, instead of sending the `lock-screen` power
+event. The two are mutually exclusive by nature: sending the event and *then*
+setting media would immediately wake the panel (`hindStandby`), so a custom
+lock screen replaces the firmware standby rather than layering on it.
+`--default` (or `--remove`) restores the firmware behaviour.
+
+Brightness is stored per-state, defaulting to 40, and a value above 50 warns:
+a locked machine sits untouched for hours, which on an AMOLED is precisely the
+burn-in case. A dark clip is worth more than a low number here.
+
+⚠ **This only works for lock, not shutdown.** The device reverts to
+firmware-drawn content ~60s after the last handshake, and at shutdown the
+daemon is gone by definition -- so nothing is holding a custom video on screen.
+At shutdown your options are the firmware's: the standby clip, or black via
+`sleep-display`. Replacing `standby.mp4` itself would need write access to the
+read-only `/system` partition, i.e. root on the device.
 
 Lock state is read with `loginctl` rather than a D-Bus signal because a
 system-scope daemon has no session of its own; the session is located by user
