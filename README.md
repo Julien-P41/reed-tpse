@@ -1,12 +1,43 @@
 # reed-tpse
 
-Linux CLI for Tryx Panorama SE AIO cooler display, reverse-engineered protocol, not affiliated with Tryx.
+Linux CLI for the Tryx Panorama AIO cooler's LCD — reverse-engineered protocol,
+not affiliated with Tryx.
 
 https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 
-> **Fork note:** This is a fork of [fadli0029/reed-tpse](https://github.com/fadli0029/reed-tpse) — all upstream credit to [@fadli0029](https://github.com/fadli0029) for the reverse-engineering work and the original implementation. Changes in this fork:
-> - Keepalive daemon now reconnects (and re-applies the saved display state) when `handshake()` fails, instead of silently writing to a dead fd after USB suspend/resume or `/dev/ttyACM*` renumbering. Reconnect events are logged to stderr so they show up in `journalctl` in real time.
-> - On-device system telemetry HUD. The cooler firmware renders the overlay natively (up to 3 metrics with position/alignment/color and CPU/GPU marketing badges) — no host-side frame compositing required. CPU/GPU/memory samples are collected from `/proc`, `/sys`, and `nvidia-smi`, then pushed by the keepalive daemon at a configurable cadence (default 5s). See the [HUD](#hud-telemetry-overlay) section below.
+## About this fork
+
+A fork of [fadli0029/reed-tpse](https://github.com/fadli0029/reed-tpse). All
+credit for the original protocol work — the 0x5A framing, the CDC-ACM + ADB
+split, the keepalive — goes to [@fadli0029](https://github.com/fadli0029);
+without it none of the below would exist. Please star
+[the upstream repo](https://github.com/fadli0029/reed-tpse), not this one.
+
+It also carries the telemetry-HUD and daemon-reconnect work from
+[koconnorgit/reed-tpse](https://github.com/koconnorgit/reed-tpse), cherry-picked
+with authorship intact.
+
+What this fork adds on top:
+
+- **`STATE` reads and a `status` command** — fan/pump RPM, the device's own
+  health warning, free storage. The firmware has no `GET`; `STATE` is the read
+  verb, and `STATE all` is the only endpoint that returns a body.
+- **LCD fan speed control** (`fan`) — named tiers or any duty 0-100%. Needed two
+  endpoints acting together, which is why it had been written off as impossible.
+- **Sleep behaviour** (`sleep-display`) — black panel instead of the firmware's
+  sleep animation when the host stops talking.
+- **Firmware presets** (`preset`) — the clips shipped in the device's own system
+  image, no upload required.
+- **`raw` passthrough** — any method/endpoint/body, so an undiscovered endpoint
+  is reachable without a code change.
+- **Exclusive port locking** and a system/user systemd unit split, fixing a
+  packaging arrangement that let two daemons hold the same tty and corrupt each
+  other's replies.
+- **HUD metric coverage** completed against the firmware's label set, with a
+  warning for any metric the host cannot actually source instead of a silent 0.
+
+Everything above was verified against real hardware (Panorama 360 ARGB,
+firmware V1.0.11); where something is only inferred, the text says so.
 
 ## Currently supported features
 
@@ -475,17 +506,18 @@ reed-tpse/
     └── system/        # boot-scope unit template (configured by CMake)
 ```
 
-The core functionality is in `libreed.a`. The CLI links against it. Future GUI (maybe in v2.0.0?) will also link against the same library.
+The core functionality is in `libreed.a` and the CLI links against it, so a GUI
+can reuse the same library — [koconnorgit/tryx-panorama](https://github.com/koconnorgit/tryx-panorama)
+is a Qt tray front-end that drives the CLI.
 
 ## How it works
 
-This is a TLDR on how it works. I plan to write a blog post on this some time in the future. Will update this section once the blog post is live.
-
-The Tryx Panorama SE exposes:
+The Tryx Panorama exposes:
 1. **USB CDC ACM** (`/dev/ttyACM0`): Serial interface for display commands
 2. **ADB**: Android Debug Bridge for file transfer to `/sdcard/pcMedia/`
 
-The device requires periodic keepalive (~60s timeout) or it reverts to the default screen. The daemon runs in the background (~1MB RAM, negligible CPU, I bet you could run this on a potato and not notice it) and handles this automatically.
+The device needs a handshake every ~60s or it reverts to firmware-drawn
+content; the daemon exists to supply that, at about 1MB RAM and negligible CPU.
 
 The wire format is essentially HTTP-over-serial carrying JSON, at 115200 8N1:
 
@@ -514,14 +546,17 @@ for the answer to the first command.
 | Arch Linux | 6.17.9 | Intel Core Ultra 9 285K | NVIDIA RTX 5080 | [@fadli0029](https://github.com/fadli0029) |
 | Bazzite | 6.17.7 | AMD Ryzen 7 9800X3D | Radeon RX 9070XT | [@CRE82DV8](https://github.com/CRE82DV8) |
 | CachyOS | 6.19.8-1-cachyos | AMD Ryzen 9 9950X3D | AMD Radeon RX 9070 XT | [@nerddotdad](https://github.com/nerddotdad) |
+| Linux Mint | 6.17.0-29-generic | AMD Ryzen 9 9950X3D | AMD Radeon RX 9070 XT | [@chuiden](https://github.com/chuiden) |
 | Ubuntu 24.04.4 LTS | 7.0.0-28-generic | Intel Core i9-13900K | NVIDIA RTX 4090 | [@Julien-P41](https://github.com/Julien-P41) |
 
-If you've tested on a different system, feel free to add yours via PR.
+Rows above the Ubuntu one come from upstream and its forks; if you've tested on
+another system, a PR to this fork is welcome.
 
-The Ubuntu entry above is a Tryx Panorama 360 ARGB (firmware V1.0.11, hardware
-V1.1, `productId` `cm01`) — the same controller board as the SE, so the
-protocol is identical. `status`, `raw`, and the `hud` overlay are all verified
-on it.
+⚠ The Ubuntu row is a **Panorama 360 ARGB**, not an SE — firmware V1.0.11,
+hardware V1.1, `productId` `cm01`. It is the same controller board, so the
+protocol is identical, but every measurement in this README (fan RPM figures,
+`displayInSleep`, preset ids) was taken on that model. Treat the numbers as
+model-specific until someone confirms them on an SE.
 
 ## License
 
@@ -529,4 +564,14 @@ MIT
 
 ## Contributing
 
-Issues and pull requests welcome at https://github.com/fadli0029/reed-tpse
+Issues and pull requests for **this fork**:
+https://github.com/Julien-P41/reed-tpse
+
+For the original tool and the protocol groundwork, go upstream:
+https://github.com/fadli0029/reed-tpse
+
+Changes here are meant to be upstreamable — commits are scoped so the useful
+ones can be cherry-picked out, and anything unverified is labelled rather than
+presented as fact. If you have a Panorama SE, confirming (or contradicting) the
+measurements in the Fan and Sleep-display sections would be the most useful
+thing you could add.

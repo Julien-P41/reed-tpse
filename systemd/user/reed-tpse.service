@@ -8,7 +8,7 @@
 #   systemctl --user enable --now reed-tpse.service
 
 [Unit]
-Description=Tryx Panorama SE AIO Display Controller for Linux Distros
+Description=Tryx Panorama AIO Display Controller for Linux
 Documentation=https://github.com/fadli0029/reed-tpse
 After=local-fs.target
 
