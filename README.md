@@ -115,12 +115,19 @@ implementations.
 
 **`waterfallMode`** is a 90° re-layout of the **parameter display**, for people
 who mount the cooler rotated: *"a more reasonable parameter display for users
-who rotate the watercooler by 90 degrees"*. The firmware implements it
+who rotate the watercooler by 90 degrees"*. It moves the sysinfo overlay, not
+the media. The firmware carries the implementation
 (`MainActivity.onWaterfallModeChange`, `doWaterfallMode`,
-`changeWaterModelPosition`, `getWaterfallInsets`, `waterfallModePosition`). It
-moves the sysinfo overlay, not the media -- so with no HUD metrics active there
-is nothing for it to move, which is why a naive test looks inert. The app only
-exposes it on the SE.
+`changeWaterModelPosition`, `getWaterfallInsets`, `waterfallModePosition`).
+
+**It does nothing on a Panorama 360 ARGB.** Tested properly -- three metrics
+rendered over a black image, so there was a parameter display to move -- the
+layout was pixel-identical before and after, and `MainActivity`'s own
+`--onWaterfallModeChange--` log never fired across seven payload shapes
+(`enable` true/1/"true", `value`, `mode`, `waterfallMode`, `open`). The
+dispatcher accepts the frame and never reaches the handler. The vendor app
+exposes this only on `panoramaSE`, which fits: the firmware is shared, the
+feature is not.
 
 **`power`** is the plain "Screen" on/off toggle in the app's UI. The firmware
 has `doPower`/`setPower` alongside `standbyVideo`, the standby clip behind
@@ -493,6 +500,10 @@ Values are sampled in the keepalive daemon from:
   `/sys/class/drm/card*/device` for AMD (`gpu_busy_percent`, hwmon,
   `pp_dpm_sclk`)
 - Memory: `/proc/meminfo`
+
+The firmware renders the chosen metrics in its own fixed order, not the order
+they are given -- asking for `CPU Temperature,GPU Temperature,Date&Time` renders
+GPU first. `--metrics` order is therefore cosmetic.
 
 #### Metric availability
 
