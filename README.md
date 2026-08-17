@@ -68,15 +68,42 @@ firmware V1.0.11); where something is only inferred, the text says so.
 - [ ] Fan `smartMode` curve values (need a captured vendor payload)
 - [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
 - [x] Firmware presets -- `reed-tpse preset`
-- [ ] Screen behaviour: `rotate`, `waterfallMode`, `power` (see note below)
+- [ ] Screen behaviour: `waterfallMode`, `power` (`rotate` is unimplemented in firmware -- see below)
 
-`rotate` is dispatched by the firmware -- `POST rotate {"degree":180}` produces
-a handler-specific `rotate--180` in the device log, which a bogus endpoint does
-not -- but no rotation is visible in an `adb screencap`, which cannot see a
-transform applied below the compositor. Whether the panel physically rotates is
-unconfirmed, so it is not exposed as a command yet. `screenFlip` is not a device
-endpoint at all; the vendor app implements it by mapping a boolean onto
-`rotate`'s `degree`.
+### What the firmware can actually act on
+
+The device's dispatcher reaches its UI through exactly one interface,
+`IOnPcControlCallBack`. Its methods are the complete set of things an incoming
+command can cause:
+
+```
+onConnected  onDisConnect  onReConnect   onRefreshUI    refreshShowData
+onBlockScreen              screenConfigChange           presetConfigChange
+onDoBrightness             onDoPower     onWaterfallModeChange
+onFileUpload               nameTitleChange
+```
+
+That list is a useful predictor: an endpoint with no corresponding callback
+cannot do anything however well-formed the payload is.
+
+**`rotate` is not implemented on firmware V1.0.11.** It is dispatched and parsed
+-- `POST rotate {"degree":180}` logs a handler-specific `rotate--180`, which a
+bogus endpoint never produces -- but there is no rotation callback in the
+interface above, no rotate field on the device's `ScreenConfig` entity, and no
+app-specific rotation symbol anywhere in `HomeUI.apk`. Confirmed empirically
+too: Android's own `mRotation` stays `ROTATION_0` across `degree` values of
+0/90/180/270, string and integer forms, alternate field names, and after each of
+the plausible "latches" (a telemetry push, `conn`, and a screen-config
+re-apply). It is therefore not exposed as a command.
+
+`screenFlip` is not a device endpoint at all; the vendor app implements it by
+mapping a boolean onto `rotate`'s `degree`, so it is inert here for the same
+reason.
+
+`waterfallMode` and `power` *do* have callbacks, so unlike `rotate` they are
+worth pursuing. `waterfallMode` reaches the dispatcher but showed no observable
+change in a plain full-screen media configuration; it likely needs a particular
+screen mode or preset context.
 
 The stats overlays never needed host-side image generation: the device renders
 them itself. The screen config object carries a `sysinfoDisplay` array and a
