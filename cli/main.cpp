@@ -44,8 +44,8 @@ static void print_usage(const char* prog) {
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
-         "  fan [--reset]           Show LCD fan/pump RPM, or reset the fan\n"
-         "                          profile to the firmware default\n"
+         "  fan [--speed <tier>]    Show LCD fan/pump RPM, or set the fan\n"
+         "                          speed: low|mid|high|full|smart\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
          "  daemon start            Start background daemon\n"
@@ -65,6 +65,9 @@ static void print_usage(const char* prog) {
          "  --json                  Machine-readable output (status)\n"
          "  --watch <seconds>       Poll until interrupted (status)\n"
          "  --system                Act on the system-scope unit (daemon)\n"
+         "  --speed <tier>          Fan speed (fan): low=25%% mid=50%% "
+         "high=75%%\n"
+         "                          full=100%% smart=firmware curve\n"
          "  --reset                 Reset the fan profile (fan)\n"
          "  --profile <file>        Send a fan profile (fan); refuses "
          "unvalidated\n"
@@ -544,7 +547,37 @@ static bool profile_has_curve_data(const picojson::value& v) {
   return false;
 }
 
+// The vendor's tier names, mapped to the fixed duty each one means here.
+// Smart Mode hands the fan back to the firmware's own curve: the smartMode
+// array's element values are still unknown, so we send it empty.
+struct FanTier {
+  const char* alias;
+  const char* wire;
+  int duty;  // -1 = Smart Mode
+};
+static const FanTier kFanTiers[] = {
+    {"low", "Low Speed", 25},
+    {"mid", "Mid Speed", 50},
+    {"high", "High Speed", 75},
+    {"full", "Full Speed", 100},
+    {"smart", "Full Speed", -1},
+};
+
+static const FanTier* lookup_fan_tier(const std::string& in) {
+  std::string k;
+  for (char c : in) k += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  for (const auto& t : kFanTiers) {
+    std::string wire;
+    for (char c : std::string(t.wire))
+      wire += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (k == t.alias || k == wire) return &t;
+  }
+  if (k == "smart mode") return &kFanTiers[4];
+  return nullptr;
+}
+
 static int cmd_fan(const std::string& port, bool reset,
+                   const std::string& speed,
                    const std::string& profile_path, bool force, bool verbose) {
   reed::Device device(port, verbose);
   if (!device.connect()) {
@@ -592,6 +625,51 @@ static int cmd_fan(const std::string& port, bool reset,
               << (force ? " (--force: unvalidated curve data)" : "") << ".\n"
               << "Note: a profile does nothing until host telemetry is being\n"
               << "pushed -- run the daemon with the HUD enabled.\n";
+    return 0;
+  }
+
+  if (!speed.empty()) {
+    const FanTier* tier = lookup_fan_tier(speed);
+    if (!tier) {
+      std::cerr << "Unknown fan speed: \"" << speed << "\"\n"
+                << "Use one of: low | mid | high | full | smart\n"
+                << "  (or the vendor names \"Low Speed\" ... \"Smart Mode\")\n";
+      return 1;
+    }
+
+    bool ok;
+    if (tier->duty < 0) {
+      ok = device.set_fan_smart(tier->wire).has_value();
+    } else {
+      ok = device.set_fan_fixed(tier->wire, tier->duty).has_value();
+    }
+    if (!ok) {
+      std::cerr << "No response to 'POST fanLCDSet'\n";
+      return 1;
+    }
+
+    auto state = reed::ConfigManager::load_state();
+    if (!state) state = reed::DisplayState{};
+    state->fan_tier = tier->wire;
+    if (tier->duty < 0) {
+      state->fan_duty.reset();
+    } else {
+      state->fan_duty = tier->duty;
+    }
+    reed::ConfigManager::save_state(*state);
+
+    if (tier->duty < 0) {
+      std::cout << "Fan handed back to the firmware's own curve (Smart Mode).\n"
+                << "  The curve values are not known yet, so this is the "
+                   "firmware default (~2040 RPM).\n";
+    } else {
+      std::cout << "Fan set to " << tier->wire << " (" << tier->duty
+                << "% duty).\n";
+      std::cout << "  Measured on firmware V1.0.11: 25%~1530, 50%~2640, "
+                   "75%~3510, 100%~4170 RPM.\n";
+    }
+    std::cout << "  Applies while host telemetry is being pushed -- run the "
+                 "daemon.\n";
     return 0;
   }
 
@@ -905,6 +983,13 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     if (state->display_in_sleep) {
       dev.set_display_in_sleep(*state->display_in_sleep);
     }
+    if (state->fan_tier) {
+      if (state->fan_duty) {
+        dev.set_fan_fixed(*state->fan_tier, *state->fan_duty);
+      } else {
+        dev.set_fan_smart(*state->fan_tier);
+      }
+    }
     if (state->preset) {
       dev.set_preset("Pre-set 1: " + *state->preset);
     } else {
@@ -963,8 +1048,13 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   using clock = std::chrono::steady_clock;
   auto now = clock::now();
   auto next_handshake = now + std::chrono::seconds(keepalive_interval);
+  // Telemetry is needed for the HUD *and* for a fixed fan duty -- the device
+  // only honours the fan profile while host data keeps arriving, and reverts
+  // to 100% when it stops. Schedule pushes if either wants them.
+  const bool push_telemetry =
+      state->hud.enabled || state->fan_duty.has_value();
   auto next_sysinfo =
-      state->hud.enabled
+      push_telemetry
           ? now + std::chrono::seconds(state->hud.push_interval_sec)
           : clock::time_point::max();
 
@@ -992,7 +1082,7 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       }
     }
 
-    if (state->hud.enabled && now >= next_sysinfo) {
+    if (push_telemetry && now >= next_sysinfo) {
       next_sysinfo = now + std::chrono::seconds(state->hud.push_interval_sec);
       // Gate first push on a successful handshake — otherwise startup issues
       // surface as "HUD shows zeros" instead of "device didn't respond".
@@ -1277,6 +1367,7 @@ int main(int argc, char* argv[]) {
   bool fan_reset = false;
   bool force = false;
   std::string fan_profile;
+  std::string fan_speed;
   int watch = 0;
   int keepalive_interval = config.keepalive_interval;
 
@@ -1310,6 +1401,8 @@ int main(int argc, char* argv[]) {
       force = true;
     } else if (arg == "--profile") {
       if (++i < argc) fan_profile = argv[i];
+    } else if (arg == "--speed") {
+      if (++i < argc) fan_speed = argv[i];
     } else if (arg == "--watch") {
       if (++i < argc) watch = std::atoi(argv[i]);
     } else if (arg == "-h" || arg == "--help") {
@@ -1387,7 +1480,7 @@ int main(int argc, char* argv[]) {
     }
     return cmd_sleep_display(port, args[0], verbose);
   } else if (command == "fan") {
-    return cmd_fan(port, fan_reset, fan_profile, force, verbose);
+    return cmd_fan(port, fan_reset, fan_speed, fan_profile, force, verbose);
   } else if (command == "preset") {
     return cmd_preset(port, args, verbose);
   } else if (command == "upload") {

@@ -194,6 +194,15 @@ std::optional<DisplayState> ConfigManager::load_state() {
     if (!p.empty()) state.preset = p;
   }
 
+  {
+    const std::string t = get_string(json, "fan_tier", "");
+    if (!t.empty()) state.fan_tier = t;
+    if (json.is<picojson::object>() &&
+        json.get<picojson::object>().count("fan_duty")) {
+      state.fan_duty = get_int(json, "fan_duty", 0);
+    }
+  }
+
   const auto& hud_val = get_value(json, "hud");
   if (hud_val.is<picojson::object>()) {
     HudConfig& h = state.hud;
@@ -241,6 +250,12 @@ bool ConfigManager::save_state(const DisplayState& state) {
   }
   if (state.preset) {
     obj["preset"] = picojson::value(*state.preset);
+  }
+  if (state.fan_tier) {
+    obj["fan_tier"] = picojson::value(*state.fan_tier);
+  }
+  if (state.fan_duty) {
+    obj["fan_duty"] = picojson::value(static_cast<double>(*state.fan_duty));
   }
 
   picojson::array hud_metrics_arr;

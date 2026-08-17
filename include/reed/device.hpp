@@ -136,6 +136,23 @@ class Device {
   // normal speed on the next telemetry push.
   std::optional<Response> reset_fan_profile();
 
+  // Set the LCD fan to a fixed duty. `tier` is the vendor's tier name and
+  // `duty` a percentage. VERIFIED on firmware V1.0.11: 25 -> 1530 RPM,
+  // 50 -> 2640, 75 -> 3510, 100 -> 4170; the firmware's own default sits
+  // around 35% (2040 RPM).
+  //
+  // The device's FanLCD model is FLAT -- speed:String, mode:String,
+  // fixedMode:int, smartMode:ArrayList -- with no per-tier sub-objects. The
+  // vendor app's four-tier payload is largely discarded by this firmware.
+  //
+  // A profile alone does nothing: the device only acts on it when host
+  // telemetry (POST all) arrives, so the daemon must be pushing.
+  std::optional<Response> set_fan_fixed(const std::string& tier, int duty);
+
+  // Hand the fan back to the firmware's own curve. The smartMode array is
+  // sent empty because its element values are not known yet.
+  std::optional<Response> set_fan_smart(const std::string& tier);
+
   // Install a raw fan profile. The curve array element shape is NOT known --
   // see the warning on cmd_fan. Callers are expected to have validated it.
   std::optional<Response> set_fan_profile(const std::string& json);

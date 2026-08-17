@@ -13,6 +13,7 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - Upload images, videos, and GIFs (auto-converts to MP4)
 - Set display content and brightness
 - Read device status: fan/pump RPM, health warnings, free storage
+- LCD fan speed control (25/50/75/100% or the firmware curve)
 - Black screen instead of the demo loop when the host is off (`sleep-display`)
 - Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
@@ -31,7 +32,8 @@ https://github.com/user-attachments/assets/1bc87fa9-cde9-4fd5-ab35-a1a15152c467
 - [ ] Custom overlay layouts (beyond the firmware's 9 anchor points and 3-metric cap)
 - [ ] Network throughput
 - [ ] Screen Splitting mode support (6-metric layout)
-- [x] Fan telemetry + safe reset -- `reed-tpse fan` (curve shape still unknown; see Fan section)
+- [x] Fan control -- `reed-tpse fan --speed low|mid|high|full|smart`
+- [ ] Fan `smartMode` curve values (need a captured vendor payload)
 - [x] Screen behaviour: `displayInSleep` -- `reed-tpse sleep-display`
 - [x] Firmware presets -- `reed-tpse preset`
 - [ ] Screen behaviour: `rotate`, `waterfallMode`, `power` (see note below)
@@ -132,7 +134,7 @@ reed-tpse display <file>         # Set display content
 reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
-reed-tpse fan [--reset]          # LCD fan/pump RPM, or reset the fan profile
+reed-tpse fan [--speed <tier>]   # LCD fan/pump RPM, or set fan speed
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
 reed-tpse daemon start           # Start background keepalive
@@ -168,43 +170,79 @@ send `conn`, so it will not disturb what is on screen.
 ### Fan (LCD / pump-head fan)
 
 ```bash
-reed-tpse fan            # LCD fan and pump RPM
-reed-tpse fan --reset    # restore the firmware's own fan behaviour
+reed-tpse fan                    # LCD fan and pump RPM
+reed-tpse fan --speed low        # 25% duty
+reed-tpse fan --speed mid        # 50%
+reed-tpse fan --speed high       # 75%
+reed-tpse fan --speed full       # 100%
+reed-tpse fan --speed smart      # hand back to the firmware's own curve
+reed-tpse fan --reset            # same as smart
 ```
 
-The pump is read-only here -- it is driven by the motherboard/BIOS.
+The pump is read-only -- it is driven by the motherboard/BIOS.
 
-**The fan needs two things, and neither works alone.** This is why several
-rounds of investigation concluded it was not host-controllable:
+Measured on firmware V1.0.11 (Panorama 360 ARGB):
 
-1. `fanLCDSet` installs a four-tier profile. On its own it changes nothing.
-2. `POST all` (the HUD telemetry push) is what makes the device evaluate that
-   profile and act on it.
+| `--speed` | `fixedMode` | RPM |
+|---|---|---|
+| low | 25 | ~1500 |
+| mid | 50 | ~2620 |
+| high | 75 | ~3480 |
+| full | 100 | 4170 |
+| smart / reset | -- | ~2040 (firmware default, ≈35%) |
 
-Test the profile without telemetry flowing, or push telemetry without touching
-the profile, and each looks inert. Verified on firmware V1.0.11: with the
-default profile, the fan sits at **4170 RPM when no host telemetry has ever
-been pushed, and drops to 2040 RPM once it is** -- so simply running the daemon
-with the HUD enabled halves the speed of the loudest component on the cooler.
+#### How it actually works
 
-Selecting a tier (`Low`/`Mid`/`High`/`Full Speed`) makes no difference while
-the profile's curve arrays are empty -- all four measured 2040 RPM -- because
-there is no per-tier curve data to evaluate.
+**Two endpoints, and neither does anything alone.** This is why several rounds
+of investigation concluded the fan was not host-controllable:
 
-#### ⚠ Why `--profile` refuses non-empty curves
+1. `POST fanLCDSet` installs the profile. No immediate effect.
+2. `POST all` -- the telemetry push -- is what makes the device evaluate it.
 
-The element shape of `smartMode`/`fixedMode` is **not known**. It was inferred
-once as `[[tempC, dutyPercent], ...]` from the vendor app's ECharts config
-(x-axis 0-100 °C, y-axis 0-100 `RPM(%)`). Sending that shape **stopped the fan
-dead at 0 RPM**, and it stayed there through every telemetry value tried,
-including an all-100% profile that should have meant maximum. Only an
-empty-curve profile brought it back.
+Set a profile with no telemetry flowing, or push telemetry without setting a
+profile, and both look inert.
 
-So `fan --profile` refuses any file containing non-empty curve arrays unless
-`--force` is passed. A correct profile has to come from a captured vendor
-payload -- run KANALI once and capture the serial traffic -- not from
-inference. `fan --reset` sends the empty-curve profile that is the known-safe
-recovery.
+**The payload is flat, not per-tier.** The device's own `FanLCD` model, read
+out of `HomeUI.apk`'s DEX field table, is:
+
+```
+speed      String        mode       String
+fixedMode  int           smartMode  ArrayList
+```
+
+There are no `lowSpeed`/`midSpeed`/`highSpeed`/`fullSpeed` sub-objects, so the
+vendor app's four-tier payload is largely discarded by this firmware. What
+works is:
+
+```json
+POST fanLCDSet {"speed":"Low Speed","mode":"Fixed Mode","fixedMode":25,"smartMode":[]}
+```
+
+⚠ **`fixedMode` is an `int`.** Sending it as an array (an earlier inference
+from the vendor app's chart config read it as `[[tempC, dutyPercent], ...]`)
+coerces to 0 and **stops the fan dead**. It stayed at 0 RPM through every
+telemetry value tried, including an all-100% profile; only an empty-curve
+profile restored it. `fan --profile` refuses nested curve arrays for this
+reason -- see below.
+
+**It fails safe.** When telemetry stops arriving the fan returns to 100%, so a
+crashed or stopped daemon leaves the panel over-cooled rather than under-cooled.
+The corollary is that a quiet setting only holds while the daemon is running:
+the daemon re-installs the profile on every connect and pushes telemetry on the
+HUD cadence **even when the HUD is disabled**, precisely so the fan setting
+keeps applying.
+
+`smartMode` is a flat `ArrayList` of numbers -- not `[x, y]` pairs; there is no
+curve-point class anywhere in the APK. Its element values are still unknown, so
+`--speed smart` sends it empty, which yields the firmware default. Recovering
+the real curve needs a captured vendor payload.
+
+#### `--profile` and `--force`
+
+`fan --profile <file>` sends a raw profile but **refuses** any file containing
+non-empty nested curve arrays unless `--force` is passed, because that is the
+shape that stopped the fan. A correct curve has to come from a capture, not
+from inference.
 
 ### Presets
 

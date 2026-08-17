@@ -39,6 +39,10 @@ struct DisplayState {
   // Set when a firmware preset is showing. Mutually exclusive with `media`:
   // the daemon re-applies whichever one is active.
   std::optional<std::string> preset;
+  // LCD fan. Volatile on the device and only applied while telemetry is being
+  // pushed, so the daemon re-installs it on every connect.
+  std::optional<std::string> fan_tier;  // vendor tier name
+  std::optional<int> fan_duty;          // percent; unset means Smart Mode
 };
 
 class ConfigManager {

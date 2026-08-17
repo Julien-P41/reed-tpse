@@ -647,6 +647,25 @@ std::optional<Response> Device::set_fan_profile(const std::string& json) {
   return send_command("POST", "fanLCDSet", json);
 }
 
+std::optional<Response> Device::set_fan_fixed(const std::string& tier,
+                                              int duty) {
+  picojson::object obj;
+  obj["speed"] = picojson::value(tier);
+  obj["mode"] = picojson::value(std::string("Fixed Mode"));
+  // int, not an array: sending an array here coerces to 0 and stops the fan.
+  obj["fixedMode"] = picojson::value(static_cast<double>(duty));
+  obj["smartMode"] = picojson::value(picojson::array());
+  return set_fan_profile(picojson::value(obj).serialize());
+}
+
+std::optional<Response> Device::set_fan_smart(const std::string& tier) {
+  picojson::object obj;
+  obj["speed"] = picojson::value(tier);
+  obj["mode"] = picojson::value(std::string("Smart Mode"));
+  obj["smartMode"] = picojson::value(picojson::array());
+  return set_fan_profile(picojson::value(obj).serialize());
+}
+
 std::optional<Response> Device::reset_fan_profile() {
   picojson::object tier;
   tier["mode"] = picojson::value(std::string("Smart Mode"));
