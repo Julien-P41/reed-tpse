@@ -1145,6 +1145,14 @@ static int cmd_brightness(const std::string& port, int value, bool verbose) {
   device.handshake();
   device.set_brightness(value);
 
+  // Persist it: the device forgets on power loss and the daemon re-applies
+  // state->brightness on connect, so without this the value silently reverts
+  // at the next reboot.
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->brightness = value;
+  reed::ConfigManager::save_state(*state);
+
   std::cout << "Brightness set to " << value << "\n";
   return 0;
 }
@@ -1333,8 +1341,12 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       if (auto batt = on_battery()) {
         dev.send_power_event(*batt ? "on-battery" : "ac-power");
       }
+      // Lock state is applied after the media below, so that a locked session
+      // does not get the normal media painted over its lock screen.
       if (auto locked = session_locked()) {
-        dev.send_power_event(*locked ? "lock-screen" : "unlock-screen");
+        if (!(config && config->lock_media)) {
+          dev.send_power_event(*locked ? "lock-screen" : "unlock-screen");
+        }
       }
     }
     if (state->fan_tier) {
@@ -1350,6 +1362,20 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       dev.set_screen_config(screen_config);
     }
     dev.set_brightness(state->brightness);
+
+    // Reconnecting during a locked session must land on the lock screen, not
+    // on the normal media. The loop only sees *transitions*, so without this a
+    // daemon restart while locked would show the desktop media until the next
+    // unlock.
+    if (power_auto && config && config->lock_media) {
+      if (auto locked = session_locked(); locked && *locked) {
+        reed::ScreenConfig lock_cfg = screen_config;
+        lock_cfg.media = {*config->lock_media};
+        lock_cfg.sysinfo_display.clear();
+        dev.set_screen_config(lock_cfg);
+        dev.set_brightness(config->lock_brightness);
+      }
+    }
     return true;
   };
 

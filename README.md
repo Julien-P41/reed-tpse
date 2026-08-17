@@ -605,6 +605,31 @@ Warning: "CPU Power" has no data source on this system -- it will render 0.
 The HUD config is persisted in `~/.local/state/reed-tpse/display.json`
 alongside the media state, so it survives reboots.
 
+## What persists
+
+Every device-side setting is volatile -- the controller forgets it whenever USB
+power drops, which happens at S5 -- so persistence means "stored on the host and
+re-applied by the daemon on every connect". Nothing sticks without the daemon
+running.
+
+| Setting | Stored in | Re-applied |
+|---|---|---|
+| media / ratio / screen mode / play mode | `display.json` | yes |
+| brightness | `display.json` | yes |
+| `sleep-display` | `display.json` | yes |
+| `preset` | `display.json` | yes |
+| `fan` tier or duty | `display.json` | yes |
+| HUD metrics, layout, badges, unit | `display.json` | yes |
+| `port`, `keepalive_interval` | `config.json` | n/a |
+| `power_auto` | `config.json` | yes |
+| `lock-display` media + brightness | `config.json` | yes |
+
+Not persisted, by design: `raw`, and one-shot `power` events -- those describe a
+moment, not a state.
+
+The daemon re-reads both files when either changes, so edits apply without a
+restart.
+
 ## Configuration
 
 Config: `~/.config/reed-tpse/config.json`
