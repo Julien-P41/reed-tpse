@@ -532,15 +532,35 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
 }
 
 // True if any tier's smartMode/fixedMode array is non-empty.
-static bool profile_has_curve_data(const picojson::value& v) {
+static bool profile_is_unsafe(const picojson::value& v, std::string* why) {
   if (!v.is<picojson::object>()) return false;
-  for (const auto& [key, tier] : v.get<picojson::object>()) {
+  const auto& top = v.get<picojson::object>();
+
+  // Flat shape -- what this firmware actually parses. `fixedMode` is an int;
+  // anything else there coerces to 0 and stops the fan. A populated
+  // `smartMode` carries curve values whose meaning is still unknown.
+  auto fixed = top.find("fixedMode");
+  if (fixed != top.end() && !fixed->second.is<double>()) {
+    *why = "`fixedMode` must be a number -- an array or string coerces to 0";
+    return true;
+  }
+  auto smart = top.find("smartMode");
+  if (smart != top.end() && smart->second.is<picojson::array>() &&
+      !smart->second.get<picojson::array>().empty()) {
+    *why = "`smartMode` carries curve values of unknown meaning";
+    return true;
+  }
+
+  // Vendor's nested per-tier shape, kept for payloads captured from the app.
+  for (const auto& [key, tier] : top) {
     if (!tier.is<picojson::object>()) continue;
+    const auto& t = tier.get<picojson::object>();
     for (const char* arr : {"smartMode", "fixedMode"}) {
-      const auto& t = tier.get<picojson::object>();
       auto it = t.find(arr);
       if (it != t.end() && it->second.is<picojson::array>() &&
           !it->second.get<picojson::array>().empty()) {
+        *why = std::string("tier `") + key + "." + arr +
+               "` holds curve data of unknown meaning";
         return true;
       }
     }
@@ -619,9 +639,10 @@ static int cmd_fan(const std::string& port, bool reset,
       return 1;
     }
 
-    if (profile_has_curve_data(parsed) && !force) {
+    std::string why;
+    if (profile_is_unsafe(parsed, &why) && !force) {
       std::cerr
-          << "Refusing to send a profile with non-empty curve arrays.\n\n"
+          << "Refusing to send this profile: " << why << ".\n\n"
           << "  The element shape of smartMode/fixedMode is NOT known. It was\n"
           << "  inferred once as [[tempC, dutyPercent], ...] from the vendor\n"
           << "  app's chart config; sending that shape stopped the LCD fan\n"

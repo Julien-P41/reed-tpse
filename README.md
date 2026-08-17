@@ -230,14 +230,27 @@ POST fanLCDSet {"speed":"Low Speed","mode":"Fixed Mode","fixedMode":35,"smartMod
 the vendor app's chart config read it as `[[tempC, dutyPercent], ...]`) coerces
 to 0 and **stops the fan dead**. It stayed at 0 RPM through every telemetry
 value tried, including an all-100% profile; only an empty-curve profile restored
-it. `fan --profile` refuses nested curve arrays for that reason.
+it. `fan --profile` refuses that shape for exactly this reason -- both the flat
+form and the vendor's nested per-tier form.
 
-**It fails safe.** When telemetry stops arriving the fan returns to 100%, so a
-crashed or stopped daemon leaves the panel over-cooled rather than
-under-cooled. The corollary is that a chosen duty only holds while the daemon
-runs: the daemon re-installs the profile on every connect and pushes telemetry
-on the HUD cadence **even when the HUD is disabled**, precisely so the fan
-setting keeps applying.
+**A telemetry push latches the profile; after that it holds on its own.**
+Installing `fixedMode: 100` and waiting 48s changed nothing, then a *single*
+`POST all` moved the fan immediately. Once latched, a Fixed Mode duty survives
+with no telemetry at all -- measured steady for minutes after stopping the
+daemon, and it persists across a warm reboot, since that never cuts USB power.
+It even survives being set from the vendor's Windows app and then running under
+Linux with nothing pushing.
+
+The daemon still pushes telemetry when a duty is configured, because it
+re-installs the profile on every connect and that fresh install needs a push to
+latch.
+
+**Smart Mode is the exception, and explains the 100% mystery.** Smart Mode
+evaluates against live host data, so with no telemetry it has nothing to work
+from and runs the fan at 100%. That is why the fan sits at 4170 RPM after a cold
+boot: a full power cut resets the controller to the factory profile, which is
+Smart Mode, and nothing is pushing yet. It is not a fail-safe reacting to the
+daemon dying -- a latched Fixed Mode duty does *not* revert.
 
 `smartMode` is a flat `ArrayList` of numbers -- not `[x, y]` pairs; there is no
 curve-point class anywhere in the APK. Its element values are still unknown, so
