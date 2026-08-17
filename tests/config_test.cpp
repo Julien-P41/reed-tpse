@@ -20,6 +20,7 @@
 #include <string>
 
 namespace fs = std::filesystem;
+using reed::Config;
 using reed::ConfigManager;
 using reed::DisplayState;
 
@@ -124,6 +125,39 @@ int main() {
   check("display_in_sleep=false round-trips",
         off_read && off_read->display_in_sleep.has_value() &&
             *off_read->display_in_sleep == false);
+
+  std::puts("config.json round-trip:");
+  ::setenv("XDG_CONFIG_HOME", tmp.c_str(), 1);
+  Config c;
+  c.port = "/dev/tryx-panorama";
+  c.brightness = 55;
+  c.keepalive_interval = 12;
+  c.power_auto = true;
+  c.lock_media = "sunset.mp4";
+  c.lock_brightness = 30;
+  check("save_config succeeds", ConfigManager::save_config(c));
+  auto rc = ConfigManager::load_config();
+  check("port", rc && rc->port == c.port);
+  check("brightness", rc && rc->brightness == c.brightness);
+  check("keepalive_interval", rc && rc->keepalive_interval == c.keepalive_interval);
+  check("power_auto", rc && rc->power_auto == c.power_auto);
+  check("lock_media", rc && rc->lock_media == c.lock_media);
+  check("lock_brightness", rc && rc->lock_brightness == c.lock_brightness);
+
+  // The lock settings must survive a `display`, which rewrites the *state*
+  // file -- that is why they live in config.json rather than beside it.
+  DisplayState d;
+  d.media = {"other.mp4"};
+  ConfigManager::save_state(d);
+  auto rc2 = ConfigManager::load_config();
+  check("lock_media survives a state rewrite", rc2 && rc2->lock_media == c.lock_media);
+
+  Config cleared = *rc;
+  cleared.lock_media.reset();
+  ConfigManager::save_config(cleared);
+  auto rc3 = ConfigManager::load_config();
+  check("cleared lock_media stays unset", rc3 && !rc3->lock_media);
+  check("power_auto survives the clear", rc3 && rc3->power_auto);
 
   fs::remove_all(tmp);
   std::printf("%s\n", failures ? "FAILURES" : "all checks passed");

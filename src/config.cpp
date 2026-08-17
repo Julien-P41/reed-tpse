@@ -125,6 +125,12 @@ std::optional<Config> ConfigManager::load_config() {
   config.brightness = get_int(json, "brightness", config.brightness);
   config.keepalive_interval = get_int(json, "keepalive_interval", config.keepalive_interval);
   config.power_auto = get_bool(json, "power_auto", config.power_auto);
+  {
+    const std::string lm = get_string(json, "lock_media", "");
+    if (!lm.empty()) config.lock_media = lm;
+    config.lock_brightness =
+        get_int(json, "lock_brightness", config.lock_brightness);
+  }
 
   return config;
 }
@@ -145,6 +151,11 @@ bool ConfigManager::save_config(const Config& config) {
   obj["keepalive_interval"] =
       picojson::value(static_cast<double>(config.keepalive_interval));
   obj["power_auto"] = picojson::value(config.power_auto);
+  if (config.lock_media) {
+    obj["lock_media"] = picojson::value(*config.lock_media);
+    obj["lock_brightness"] =
+        picojson::value(static_cast<double>(config.lock_brightness));
+  }
 
   file << picojson::value(obj).serialize() << "\n";
   return file.good();
@@ -194,12 +205,6 @@ std::optional<DisplayState> ConfigManager::load_state() {
   {
     const std::string p = get_string(json, "preset", "");
     if (!p.empty()) state.preset = p;
-  }
-
-  {
-    const std::string lm = get_string(json, "lock_media", "");
-    if (!lm.empty()) state.lock_media = lm;
-    state.lock_brightness = get_int(json, "lock_brightness", state.lock_brightness);
   }
 
   {
@@ -258,11 +263,6 @@ bool ConfigManager::save_state(const DisplayState& state) {
   }
   if (state.preset) {
     obj["preset"] = picojson::value(*state.preset);
-  }
-  if (state.lock_media) {
-    obj["lock_media"] = picojson::value(*state.lock_media);
-    obj["lock_brightness"] =
-        picojson::value(static_cast<double>(state.lock_brightness));
   }
   if (state.fan_tier) {
     obj["fan_tier"] = picojson::value(*state.fan_tier);

@@ -582,13 +582,13 @@ static std::optional<bool> on_battery() {
 static int cmd_lock_display(const std::string& port, const std::vector<std::string>& args,
                             int brightness, bool brightness_given, bool verbose) {
   (void)port;
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
+  auto cfg = reed::ConfigManager::load_config();
+  if (!cfg) cfg = reed::Config{};
 
   if (args.empty()) {
-    if (state->lock_media) {
-      std::cout << "Lock display: " << *state->lock_media << " at "
-                << state->lock_brightness << "% brightness\n";
+    if (cfg->lock_media) {
+      std::cout << "Lock display: " << *cfg->lock_media << " at "
+                << cfg->lock_brightness << "% brightness\n";
     } else {
       std::cout << "Lock display: (firmware standby clip)\n";
     }
@@ -599,9 +599,9 @@ static int cmd_lock_display(const std::string& port, const std::vector<std::stri
 
   const std::string& arg = args[0];
   if (arg == "--default" || arg == "--remove" || arg == "default") {
-    state->lock_media.reset();
-    if (!reed::ConfigManager::save_state(*state)) {
-      std::cerr << "Failed to save state\n";
+    cfg->lock_media.reset();
+    if (!reed::ConfigManager::save_config(*cfg)) {
+      std::cerr << "Failed to save config\n";
       return 1;
     }
     std::cout << "Lock display reset to the firmware standby clip.\n"
@@ -627,16 +627,16 @@ static int cmd_lock_display(const std::string& port, const std::vector<std::stri
     }
   }
 
-  const int level = brightness_given ? brightness : state->lock_brightness;
+  const int level = brightness_given ? brightness : cfg->lock_brightness;
   if (level < 0 || level > 100) {
     std::cerr << "Brightness must be 0-100\n";
     return 1;
   }
 
-  state->lock_media = media;
-  state->lock_brightness = level;
-  if (!reed::ConfigManager::save_state(*state)) {
-    std::cerr << "Failed to save state\n";
+  cfg->lock_media = media;
+  cfg->lock_brightness = level;
+  if (!reed::ConfigManager::save_config(*cfg)) {
+    std::cerr << "Failed to save config\n";
     return 1;
   }
 
@@ -652,7 +652,7 @@ static int cmd_lock_display(const std::string& port, const std::vector<std::stri
   }
   std::cout << "  Applies when the daemon is running with \"power_auto\": "
                "true.\n";
-  if (verbose) std::cout << "  (saved to " << reed::ConfigManager::get_state_path() << ")\n";
+  if (verbose) std::cout << "  (saved to " << reed::ConfigManager::get_config_path() << ")\n";
   return 0;
 }
 
@@ -1434,16 +1434,16 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       if (auto locked = session_locked()) {
         if (!last_locked || *last_locked != *locked) {
           if (last_locked && device->is_connected()) {
-            if (state->lock_media) {
+            if (config && config->lock_media) {
               // A custom lock screen replaces the firmware standby rather than
               // layering on it: sending the power event and then setting media
               // would immediately wake the panel again (hindStandby).
               if (*locked) {
                 reed::ScreenConfig lock_cfg = screen_config;
-                lock_cfg.media = {*state->lock_media};
+                lock_cfg.media = {*config->lock_media};
                 lock_cfg.sysinfo_display.clear();
                 device->set_screen_config(lock_cfg);
-                device->set_brightness(state->lock_brightness);
+                device->set_brightness(config->lock_brightness);
               } else {
                 device->set_screen_config(screen_config);
                 device->set_brightness(state->brightness);
@@ -1455,7 +1455,7 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
             if (verbose) {
               std::cerr << "power: session "
                         << (*locked ? "locked" : "unlocked")
-                        << (state->lock_media ? " (custom lock media)" : "")
+                        << ((config && config->lock_media) ? " (custom lock media)" : "")
                         << "\n";
             }
           }

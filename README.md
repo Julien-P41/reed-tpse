@@ -379,6 +379,10 @@ reed-tpse lock-display                              # show the current setting
 reed-tpse lock-display --default                    # back to the standby clip
 ```
 
+The setting lives in `config.json` alongside `power_auto`, not in the state
+file -- `display` rewrites the state file, and this is configuration rather
+than runtime state.
+
 With `lock_media` set, the daemon swaps the panel to that media on lock and
 back to your normal media on unlock, instead of sending the `lock-screen` power
 event. The two are mutually exclusive by nature: sending the event and *then*
@@ -389,6 +393,12 @@ lock screen replaces the firmware standby rather than layering on it.
 Brightness is stored per-state, defaulting to 40, and a value above 50 warns:
 a locked machine sits untouched for hours, which on an AMOLED is precisely the
 burn-in case. A dark clip is worth more than a low number here.
+
+⚠ **Suspend behaves like shutdown, not like lock.** While the host is
+suspended nothing is pushing keepalive, so the device falls back to
+firmware-drawn content after ~60s whatever `lock_media` says. The custom screen
+reappears on resume if the session is still locked. Only `sleep-display`
+changes what that fallback looks like.
 
 ⚠ **This only works for lock, not shutdown.** The device reverts to
 firmware-drawn content ~60s after the last handshake, and at shutdown the

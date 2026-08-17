@@ -14,6 +14,12 @@ struct Config {
   // as the session locks, and `shutdown` when the daemon is stopped. Opt-in,
   // since it changes what the panel does without being asked.
   bool power_auto = false;
+  // Shown while the session is locked, in place of the firmware's standby
+  // clip. Unset means "use the firmware default", i.e. send the lock-screen
+  // power event instead. Configuration, not runtime state -- it belongs here
+  // rather than in display.json, which `display` rewrites.
+  std::optional<std::string> lock_media;
+  int lock_brightness = 40;
 };
 
 struct HudConfig {
@@ -45,11 +51,6 @@ struct DisplayState {
   std::optional<std::string> preset;
   // LCD fan. Volatile on the device and only applied while telemetry is being
   // pushed, so the daemon re-installs it on every connect.
-  // Shown while the session is locked, in place of the firmware's standby
-  // clip. Unset means "use the firmware default", i.e. send the lock-screen
-  // power event instead.
-  std::optional<std::string> lock_media;
-  int lock_brightness = 40;
   std::optional<std::string> fan_tier;  // vendor tier name
   std::optional<int> fan_duty;          // percent; unset means Smart Mode
 };
