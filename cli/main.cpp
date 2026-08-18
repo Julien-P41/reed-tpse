@@ -1473,8 +1473,22 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   long long cfg_seen = mtime_of(cfg_path);
   long long state_seen = mtime_of(state_path);
 
+  // The device can accept a connection before its UI app is ready: adbd and
+  // the serial link come up well before HomeUI does. Settings pushed into that
+  // window are lost -- media never appears (black panel) and the fan is left in
+  // Smart Mode with a null curve, which the firmware evaluates as 0 RPM. One
+  // re-apply shortly after connecting costs nothing and heals that.
+  auto reapply_at = clock::now() + std::chrono::seconds(20);
+  bool reapplied = false;
+
   int failures = 0;
   while (g_running) {
+    if (!reapplied && clock::now() >= reapply_at && device->is_connected()) {
+      reapplied = true;
+      restore(*device);
+      if (verbose) std::cerr << "settings re-applied after startup\n";
+    }
+
     const long long cfg_now = mtime_of(cfg_path);
     const long long state_now = mtime_of(state_path);
     if (cfg_now != cfg_seen || state_now != state_seen) {

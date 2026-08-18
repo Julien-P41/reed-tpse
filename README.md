@@ -628,6 +628,22 @@ Warning: "CPU Power" has no data source on this system -- it will render 0.
 The HUD config is persisted in `~/.local/state/reed-tpse/display.json`
 alongside the media state, so it survives reboots.
 
+## Startup race
+
+The device accepts a serial connection before its UI app is ready -- adbd and
+the CDC-ACM link come up around 12s before HomeUI does. Anything pushed into
+that window is lost: the media never appears (black panel) and the fan is left
+in Smart Mode with a null curve, which the firmware evaluates as **0 RPM** and
+re-evaluates as 0 on every telemetry push.
+
+The daemon therefore re-applies its settings once, 20s after connecting. If you
+script around a device restart, wait for the app rather than the transport:
+
+```bash
+adb wait-for-device                                    # adbd only -- not enough
+until adb shell pidof com.baiyi.homeui.tkcfanhomeui >/dev/null 2>&1; do sleep 2; done
+```
+
 ## What persists
 
 Every device-side setting is volatile -- the controller forgets it whenever USB
@@ -809,8 +825,25 @@ the panel came back rotated 90° clockwise, from an `enable:true` sent during
 that earlier testing. So the absence of a live handler call proves nothing here
 -- the same trap as `rotate`, and the second time it caught me.
 
-To turn it off, send `{"enable":false}` and power-cycle the device (a full
-shutdown with USB power cut at S5, or unplugging it).
+To turn it off, send the `false` form and restart the device. `adb reboot`
+restarts the AIO alone -- no PC shutdown needed, and this hardware records
+`reboot,shell` in `persist.sys.boot.reason.history` from previous ones. It is an
+ordinary Android reboot, not the `adb root` that is known to drop the USB link.
+
+⚠ The payload key is **not known**. `{"enable":false}` alone did not clear it;
+what worked was sending `enable`/`value`/`mode`/`waterfallMode`/`open` as
+`false` and `0` together, then rebooting. Unlike `power`, this handler does not
+validate, so it never names its field in an exception, and the setting is
+invisible from the host: `screencap` shows normal orientation, Android's
+`mRotation` stays `0`, and nothing is logged at boot -- it is applied below the
+compositor and stored in the app's own `/data`, which needs root to read.
+
+⚠⚠ **Do not sweep payload variants at this device.** Settings here can be
+stored and applied only at the next restart, so a sweep that appears to do
+nothing can leave a change armed -- that is exactly how waterfall mode ended up
+enabled, discovered only when the AIO was next unplugged. The rule the vendor's
+own UI states for Mirror Mode ("the cooler will restart upon confirming")
+applies more widely than to Mirror Mode.
 
 **`power` is a host power-event notification, not a screen switch.** The field
 is `event`, and sending anything else throws `---Exception---No value for event`
