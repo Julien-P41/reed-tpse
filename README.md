@@ -577,6 +577,29 @@ The firmware renders the chosen metrics in its own fixed order, not the order
 they are given -- asking for `CPU Temperature,GPU Temperature,Date&Time` renders
 GPU first. `--metrics` order is therefore cosmetic.
 
+##### Repurposing a slot
+
+The label set is fixed. A label the firmware does not know is silently dropped:
+sending `sysinfoDisplay: ["COOLANT TEMP", "CPU Temperature"]` renders only the
+CPU one, so there is no way to add a metric of your own.
+
+What *is* yours:
+
+- **The value.** Whatever you put in a `PcInfo` field is what the panel shows,
+  so a slot can carry something else entirely -- coolant temperature in the
+  `CPU Temperature` field, say.
+- **The badge text.** `--cpu-name` / `--gpu-name` (the `spec` endpoint) render
+  as free-text tags, so a repurposed slot can at least be labelled.
+
+The catch is that the badges are separate tags at the top of the overlay, not
+captions on the metrics. The metric keeps its firmware caption -- a repurposed
+`CPU Temperature` still reads `CPU TEMP` underneath the number, whatever the
+badge says. Verified on firmware V1.0.11: badges rendered `COOLANT` and
+`AMBIENT` while the metrics below still read `CPU TEMP` and `GPU TEMP`.
+
+Badges also depend on a matching metric being selected -- the CPU badge needs a
+CPU metric in the set.
+
 ##### Metric availability
 
 The firmware accepts 16 labels, but a Linux host cannot source all of them, and
