@@ -1026,7 +1026,8 @@ static int cmd_upload(const std::string& file, bool verbose) {
 
 static int cmd_display(const std::string& port,
                        const std::vector<std::string>& files,
-                       const std::string& ratio, int brightness, bool keepalive,
+                       const std::string& ratio, int brightness,
+                       bool brightness_given, bool keepalive,
                        int keepalive_interval, bool verbose) {
   if (brightness < 0 || brightness > 100) {
     std::cerr << "Brightness must be 0-100\n";
@@ -1072,6 +1073,11 @@ static int cmd_display(const std::string& port,
     }
   }
 
+  // Loaded before touching the device: the effective brightness falls back to
+  // whatever is already stored when --brightness was not given.
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -1085,7 +1091,9 @@ static int cmd_display(const std::string& port,
   config.ratio = ratio;
 
   device.set_screen_config(config);
-  device.set_brightness(brightness);
+  const int effective_brightness =
+      brightness_given ? brightness : state->brightness;
+  device.set_brightness(effective_brightness);
 
   std::cout << "Display set to: ";
   for (size_t i = 0; i < media_files.size(); ++i) {
@@ -1093,17 +1101,19 @@ static int cmd_display(const std::string& port,
     std::cout << media_files[i];
   }
   std::cout << "\n";
-  std::cout << "Brightness: " << brightness << "\n";
+  std::cout << "Brightness: " << effective_brightness
+            << (brightness_given ? "\n" : " (unchanged)\n");
 
   // Save state for daemon. Load first and mutate only the display fields:
   // save_state() truncates, so building a fresh DisplayState here would drop
   // every other setting sharing this file -- the HUD config, display_in_sleep,
   // and any non-default screen/play mode -- on each `display` call.
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
+  // Brightness is its own setting. Changing what is on screen should not
+  // silently reset it to the config default -- that quietly undid any
+  // `reed-tpse brightness N` the moment the media changed.
+  if (brightness_given) state->brightness = brightness;
   state->media = media_files;
   state->ratio = ratio;
-  state->brightness = brightness;
   state->preset.reset();  // custom media and a preset are mutually exclusive
   reed::ConfigManager::save_state(*state);
 
@@ -1967,8 +1977,8 @@ int main(int argc, char* argv[]) {
       std::cerr << "Usage: reed-tpse display <file...>\n";
       return 1;
     }
-    return cmd_display(port, args, ratio, brightness, keepalive,
-                       keepalive_interval, verbose);
+    return cmd_display(port, args, ratio, brightness, brightness_given,
+                       keepalive, keepalive_interval, verbose);
   } else if (command == "brightness") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse brightness <0-100>\n";

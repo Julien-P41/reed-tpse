@@ -647,6 +647,16 @@ running.
 | `power_auto` | `config.json` | yes |
 | `lock-display` media + brightness | `config.json` | yes |
 
+⚠ There are two `brightness` values and they are not the same thing.
+`config.json` → `brightness` is only the **default for `display --brightness`**
+when the flag is omitted; the daemon never applies it. What actually reaches
+the panel is `display.json` → `brightness`, set by `reed-tpse brightness N` or
+by `display --brightness N`.
+
+`display` without `--brightness` leaves the stored brightness alone. It used to
+overwrite it with the config default, so any `brightness N` was quietly undone
+the next time the media changed.
+
 Not persisted, by design: `raw`, and one-shot `power` events -- those describe a
 moment, not a state.
 
