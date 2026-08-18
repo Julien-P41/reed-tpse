@@ -796,14 +796,21 @@ the media. The firmware carries the implementation
 (`MainActivity.onWaterfallModeChange`, `doWaterfallMode`,
 `changeWaterModelPosition`, `getWaterfallInsets`, `waterfallModePosition`).
 
-**It does nothing on a Panorama 360 ARGB.** Tested properly -- three metrics
-rendered over a black image, so there was a parameter display to move -- the
-layout was pixel-identical before and after, and `MainActivity`'s own
-`--onWaterfallModeChange--` log never fired across seven payload shapes
-(`enable` true/1/"true", `value`, `mode`, `waterfallMode`, `open`). The
-dispatcher accepts the frame and never reaches the handler. The vendor app
-exposes this only on `panoramaSE`, which fits: the firmware is shared, the
-feature is not.
+**It works, but only after the device is power-cycled.** An earlier round here
+concluded it did nothing: the layout was pixel-identical before and after, and
+`MainActivity`'s own `--onWaterfallModeChange--` never fired across seven
+payload shapes. That was measuring the wrong window. `POST waterfallMode
+{"enable":true}` is stored and applied when the controller next starts -- the
+same "set now, take effect on restart" shape as Mirror Mode, whose dialog warns
+that the cooler restarts on confirmation.
+
+It surfaced by accident: after the AIO was unplugged during cable management,
+the panel came back rotated 90° clockwise, from an `enable:true` sent during
+that earlier testing. So the absence of a live handler call proves nothing here
+-- the same trap as `rotate`, and the second time it caught me.
+
+To turn it off, send `{"enable":false}` and power-cycle the device (a full
+shutdown with USB power cut at S5, or unplugging it).
 
 **`power` is a host power-event notification, not a screen switch.** The field
 is `event`, and sending anything else throws `---Exception---No value for event`

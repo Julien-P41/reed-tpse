@@ -922,6 +922,12 @@ static int cmd_fan(const std::string& port, bool reset,
       return 1;
     }
 
+    // A profile alone does nothing: the device only evaluates it once host
+    // telemetry arrives. Push one frame so the setting takes effect now rather
+    // than waiting for a daemon -- which matters at boot, where the fan would
+    // otherwise sit at the firmware default until the daemon starts.
+    device.send_sysinfo({});
+
     auto state = reed::ConfigManager::load_state();
     if (!state) state = reed::DisplayState{};
     state->fan_tier = wire_tier;
@@ -933,8 +939,7 @@ static int cmd_fan(const std::string& port, bool reset,
       std::cout << "  ⚠ 0% stops the fan. It cools the panel and SoC, and no "
                    "temperature is readable.\n";
     }
-    std::cout << "  Applies while host telemetry is being pushed -- run the "
-                 "daemon.\n";
+    std::cout << "  Applied now; the daemon re-applies it on every connect.\n";
     return 0;
   }
 
@@ -943,10 +948,9 @@ static int cmd_fan(const std::string& port, bool reset,
       std::cerr << "No response while resetting the fan profile\n";
       return 1;
     }
+    device.send_sysinfo({});  // latch it, same as above
     std::cout << "Fan profile reset to firmware default (empty curves, "
-                 "Full Speed / Smart Mode).\n"
-              << "It takes effect on the next telemetry push; run the daemon "
-                 "to resume those.\n";
+                 "Full Speed / Smart Mode).\n";
     return 0;
   }
 
