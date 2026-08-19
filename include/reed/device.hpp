@@ -107,6 +107,29 @@ struct PortHolder {
 
 std::optional<PortHolder> find_port_holder(const std::string& port);
 
+// The JSON bodies, separated from the transport that carries them.
+//
+// Exposed because this is where every protocol bug in this project has lived:
+// a `fixedMode` that stopped the fan, an invented `Type` key, a filter value
+// sent as "" instead of null, a split zone shipped blank. They are pure
+// functions of their inputs, so they can be checked against captured vendor
+// traffic without a device.
+namespace payload {
+
+std::string screen_config(const ScreenConfig& config);
+std::string fan(const std::string& mode, const FanCurve& curve, int fixed_duty);
+std::string overlay(const DisplaySettings& settings,
+                    const std::vector<std::string>& metrics);
+std::string preset(const std::string& id, const DisplaySettings& settings,
+                   const std::vector<std::string>& metrics);
+std::string full_config(const FullConfig& config, const ScreenConfig& screen);
+
+// The vendor's default fan curve -- its "low" tier, and what its `config`
+// blob ships as the factory setting.
+extern const FanCurve kDefaultCurve;
+
+}  // namespace payload
+
 class Device {
  public:
   explicit Device(const std::string& port, bool verbose = false);

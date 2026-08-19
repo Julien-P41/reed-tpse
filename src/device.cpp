@@ -442,6 +442,7 @@ std::optional<DeviceInfo> Device::handshake() {
   return info;
 }
 
+namespace payload {
 namespace {
 
 // The `settings` block, shared by screen configs and presets.
@@ -514,9 +515,37 @@ picojson::object screen_object(const ScreenConfig& config) {
 
 }  // namespace
 
-std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
+std::string screen_config(const ScreenConfig& config) {
+  return picojson::value(screen_object(config)).serialize();
+}
 
-  std::string content = picojson::value(screen_object(config)).serialize();
+std::string overlay(const DisplaySettings& settings,
+                    const std::vector<std::string>& metrics) {
+  picojson::array items;
+  for (const auto& m : metrics) items.push_back(picojson::value(m));
+
+  picojson::object obj;
+  obj["settings"] = picojson::value(settings_object(settings));
+  obj["sysinfoDisplay"] = picojson::value(items);
+  return picojson::value(obj).serialize();
+}
+
+std::string preset(const std::string& id, const DisplaySettings& settings,
+                   const std::vector<std::string>& metrics) {
+  picojson::array items;
+  for (const auto& m : metrics) items.push_back(picojson::value(m));
+
+  picojson::object obj;
+  obj["id"] = picojson::value(id);
+  obj["settings"] = picojson::value(settings_object(settings));
+  obj["sysinfoDisplay"] = picojson::value(items);
+  return picojson::value(obj).serialize();
+}
+
+}  // namespace payload
+
+std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
+  std::string content = payload::screen_config(config);
 
   // One POST, like the vendor. This used to be sent twice with a 500ms gap on
   // the belief that the first was unreliable; ten fresh-connect single sends
@@ -532,8 +561,10 @@ std::optional<Response> Device::set_brightness(int value) {
   return send_command("POST", "brightness", content);
 }
 
-std::optional<Response> Device::send_config(const FullConfig& config,
-                                           const ScreenConfig& screen) {
+namespace payload {
+
+std::string full_config(const FullConfig& config,
+                        const ScreenConfig& screen) {
   picojson::object id = screen_object(screen);
 
   picojson::object fan;
@@ -570,7 +601,14 @@ std::optional<Response> Device::send_config(const FullConfig& config,
   obj["waterBlockScreen"] = picojson::value(screen_block);
   obj["spec"] = picojson::value(spec);
 
-  return send_command("POST", "config", picojson::value(obj).serialize());
+  return picojson::value(obj).serialize();
+}
+
+}  // namespace payload
+
+std::optional<Response> Device::send_config(const FullConfig& config,
+                                           const ScreenConfig& screen) {
+  return send_command("POST", "config", payload::full_config(config, screen));
 }
 
 std::optional<Response> Device::set_rotation(int degree) {
@@ -701,15 +739,7 @@ std::optional<Response> Device::set_sysinfo_display(
 
 std::optional<Response> Device::set_overlay(
     const DisplaySettings& settings, const std::vector<std::string>& metrics) {
-  picojson::array items;
-  for (const auto& m : metrics) {
-    items.push_back(picojson::value(m));
-  }
-
-  picojson::object obj;
-  obj["settings"] = picojson::value(settings_object(settings));
-  obj["sysinfoDisplay"] = picojson::value(items);
-  return send_command("POST", "preset", picojson::value(obj).serialize());
+  return send_command("POST", "preset", payload::overlay(settings, metrics));
 }
 
 std::optional<Response> Device::send_spec(const std::string& cpu_name,
@@ -737,30 +767,20 @@ std::optional<Response> Device::send_power_event(const std::string& event) {
 std::optional<Response> Device::set_preset(
     const std::string& id, const DisplaySettings& settings,
     const std::vector<std::string>& sysinfo) {
-  picojson::object obj;
-  obj["id"] = picojson::value(id);
-  obj["settings"] = picojson::value(settings_object(settings));
-
-  picojson::array sysinfo_arr;
-  for (const auto& label : sysinfo) {
-    sysinfo_arr.push_back(picojson::value(label));
-  }
-  obj["sysinfoDisplay"] = picojson::value(sysinfo_arr);
-
-  std::string content = picojson::value(obj).serialize();
-  return send_command("POST", "waterBlockScreenId", content);
+  return send_command("POST", "waterBlockScreenId",
+                      payload::preset(id, settings, sysinfo));
 }
 
 std::optional<Response> Device::set_fan_profile(const std::string& json) {
   return send_command("POST", "fanLCDSet", json);
 }
 
-namespace {
+namespace payload {
 
 // {mode, smartMode, fixedMode} -- byte-for-byte the shape KANALI 1.2.1 puts on
 // the wire. No `speed`, and fixedMode is always a number even in Smart Mode.
-std::string fan_payload(const std::string& mode, const FanCurve& curve,
-                        int fixed_duty) {
+std::string fan(const std::string& mode, const FanCurve& curve,
+                int fixed_duty) {
   picojson::array points;
   for (const auto& [temp, duty] : curve) {
     picojson::array point;
@@ -781,18 +801,18 @@ std::string fan_payload(const std::string& mode, const FanCurve& curve,
 const FanCurve kDefaultCurve = {{0, 10},  {10, 20}, {30, 30},  {50, 40},
                                 {65, 55}, {80, 70}, {90, 100}, {100, 100}};
 
-}  // namespace
+}  // namespace payload
 
 std::optional<Response> Device::set_fan_fixed(int duty, const FanCurve& curve) {
-  return set_fan_profile(
-      fan_payload("Fixed Mode", curve.empty() ? kDefaultCurve : curve, duty));
+  return set_fan_profile(payload::fan(
+      "Fixed Mode", curve.empty() ? payload::kDefaultCurve : curve, duty));
 }
 
 std::optional<Response> Device::set_fan_smart(const FanCurve& curve,
                                               int fixed_duty) {
-  return set_fan_profile(
-      fan_payload("Smart Mode", curve.empty() ? kDefaultCurve : curve,
-                  fixed_duty));
+  return set_fan_profile(payload::fan(
+      "Smart Mode", curve.empty() ? payload::kDefaultCurve : curve,
+      fixed_duty));
 }
 
 std::optional<Response> Device::reset_fan_profile() {
@@ -800,7 +820,7 @@ std::optional<Response> Device::reset_fan_profile() {
   // The previous recovery here installed four tier sub-objects with empty
   // curves and `fixedMode: []`; that is the payload family that stopped the
   // fan at 0 RPM, and no tier selection would restart it.
-  return set_fan_smart(kDefaultCurve, 40);
+  return set_fan_smart(payload::kDefaultCurve, 40);
 }
 
 std::optional<Response> Device::set_temperature_unit(const std::string& unit) {
