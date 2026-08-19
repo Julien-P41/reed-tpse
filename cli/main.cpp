@@ -46,6 +46,8 @@ static void print_usage(const char* prog) {
          "response\n"
          "  upload <file>           Upload media file (converts GIF to MP4)\n"
          "  display <file...>       Set display to specified media files\n"
+         "                          (--play-mode single|shuffle|loop for a\n"
+         "                           multi-file playlist)\n"
          "  brightness <0-100>      Set display brightness\n"
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
@@ -766,33 +768,49 @@ static bool profile_is_unsafe(const picojson::value& v, std::string* why) {
   if (!v.is<picojson::object>()) return false;
   const auto& top = v.get<picojson::object>();
 
-  // Flat shape -- what this firmware actually parses. `fixedMode` is an int;
-  // anything else there coerces to 0 and stops the fan. A populated
-  // `smartMode` carries curve values whose meaning is still unknown.
+  // `fixedMode` is an int and is required even in Smart Mode -- KANALI sends
+  // it every time. Anything non-numeric there coerces to 0 and stops the fan;
+  // that is the one failure this guard exists for.
   auto fixed = top.find("fixedMode");
-  if (fixed != top.end() && !fixed->second.is<double>()) {
+  if (fixed == top.end()) {
+    *why = "no `fixedMode` -- the vendor sends a number in both modes";
+    return true;
+  }
+  if (!fixed->second.is<double>()) {
     *why = "`fixedMode` must be a number -- an array or string coerces to 0";
     return true;
   }
+
+  // `smartMode` is an array of [degC, duty%] pairs, confirmed from captured
+  // vendor traffic. An empty array is accepted (that is what Fixed-only
+  // payloads used to carry), but a malformed one is not.
   auto smart = top.find("smartMode");
-  if (smart != top.end() && smart->second.is<picojson::array>() &&
-      !smart->second.get<picojson::array>().empty()) {
-    *why = "`smartMode` carries curve values of unknown meaning";
-    return true;
+  if (smart != top.end()) {
+    if (!smart->second.is<picojson::array>()) {
+      *why = "`smartMode` must be an array of [degC, duty] pairs";
+      return true;
+    }
+    for (const auto& point : smart->second.get<picojson::array>()) {
+      if (!point.is<picojson::array>() ||
+          point.get<picojson::array>().size() != 2 ||
+          !point.get<picojson::array>()[0].is<double>() ||
+          !point.get<picojson::array>()[1].is<double>()) {
+        *why = "`smartMode` points must each be [degC, duty], both numbers";
+        return true;
+      }
+    }
   }
 
-  // Vendor's nested per-tier shape, kept for payloads captured from the app.
+  // The vendor's nested per-tier shape. This firmware does not parse it, and
+  // an earlier attempt to send it -- with `fixedMode: []` inside each tier --
+  // is what stopped the fan. Refuse it outright.
   for (const auto& [key, tier] : top) {
     if (!tier.is<picojson::object>()) continue;
     const auto& t = tier.get<picojson::object>();
-    for (const char* arr : {"smartMode", "fixedMode"}) {
-      auto it = t.find(arr);
-      if (it != t.end() && it->second.is<picojson::array>() &&
-          !it->second.get<picojson::array>().empty()) {
-        *why = std::string("tier `") + key + "." + arr +
-               "` holds curve data of unknown meaning";
-        return true;
-      }
+    if (t.count("smartMode") || t.count("fixedMode")) {
+      *why = std::string("tier sub-object `") + key +
+             "` -- this firmware takes a flat {mode, smartMode, fixedMode}";
+      return true;
     }
   }
   return false;
@@ -809,12 +827,21 @@ struct FanTier {
   const char* alias;
   const char* wire;
   int duty;
+  reed::FanCurve curve;
 };
+// Duties and curves are KANALI 1.2.1's own, read off the wire -- one
+// fanLCDSet capture per tier. The app sends the curve and the fixed duty
+// together every time, whichever mode is active, so a tier is really the
+// pair. The earlier 35/57/78/100 here was interpolated by hand.
 static const FanTier kFanTiers[] = {
-    {"low", "Low Speed", 35},
-    {"mid", "Mid Speed", 57},
-    {"high", "High Speed", 78},
-    {"full", "Full Speed", 100},
+    {"low", "Low Speed", 40,
+     {{0, 10}, {10, 20}, {30, 30}, {50, 40}, {65, 55}, {80, 70}, {90, 100}, {100, 100}}},
+    {"mid", "Mid Speed", 60,
+     {{0, 10}, {10, 20}, {30, 35}, {50, 50}, {65, 75}, {80, 80}, {90, 100}, {100, 100}}},
+    {"high", "High Speed", 80,
+     {{0, 10}, {10, 20}, {30, 50}, {40, 70}, {55, 85}, {70, 90}, {90, 100}, {100, 100}}},
+    {"full", "Full Speed", 100,
+     {{0, 10}, {10, 20}, {30, 70}, {40, 100}, {65, 100}, {80, 100}, {90, 100}, {100, 100}}},
 };
 
 static const FanTier* lookup_fan_tier(const std::string& in) {
@@ -873,14 +900,15 @@ static int cmd_fan(const std::string& port, bool reset,
     if (profile_is_unsafe(parsed, &why) && !force) {
       std::cerr
           << "Refusing to send this profile: " << why << ".\n\n"
-          << "  The element shape of smartMode/fixedMode is NOT known. It was\n"
-          << "  inferred once as [[tempC, dutyPercent], ...] from the vendor\n"
-          << "  app's chart config; sending that shape stopped the LCD fan\n"
-          << "  dead (0 RPM) on firmware V1.0.11, and no telemetry value would\n"
-          << "  restart it -- only `reed-tpse fan --reset` did.\n\n"
-          << "  A correct profile has to come from a captured vendor payload,\n"
-          << "  not from inference. If this file IS such a capture, re-run\n"
-          << "  with --force.\n";
+          << "  A valid profile is flat and looks like the vendor's own:\n"
+          << "    {\"mode\": \"Smart Mode\",\n"
+          << "     \"smartMode\": [[0,10],[10,20],[30,30],[50,40],\n"
+          << "                    [65,55],[80,70],[90,100],[100,100]],\n"
+          << "     \"fixedMode\": 40}\n\n"
+          << "  8 [degC, duty%] points, and a NUMERIC fixedMode in both\n"
+          << "  modes. A non-numeric fixedMode coerces to 0 and stops the LCD\n"
+          << "  fan dead on firmware V1.0.11; only `fan --reset` recovers it.\n"
+          << "  Override with --force if you know better.\n";
       return 1;
     }
 
@@ -898,6 +926,7 @@ static int cmd_fan(const std::string& port, bool reset,
   // Either a named tier (positional) or an explicit duty via --speed.
   int duty = -1;
   std::string wire_tier;
+  reed::FanCurve curve;
   if (!tier_arg.empty()) {
     const FanTier* tier = lookup_fan_tier(tier_arg);
     if (!tier) {
@@ -907,6 +936,7 @@ static int cmd_fan(const std::string& port, bool reset,
     }
     duty = tier->duty;
     wire_tier = tier->wire;
+    curve = tier->curve;
   } else if (duty_arg >= 0) {
     if (duty_arg > 100) {
       std::cerr << "--speed must be 0-100 (got " << duty_arg << ")\n";
@@ -914,10 +944,13 @@ static int cmd_fan(const std::string& port, bool reset,
     }
     duty = duty_arg;
     wire_tier = nearest_tier_name(duty);
+    // KANALI never sends a fixed duty without a curve beside it, so pair an
+    // arbitrary --speed with the curve of the closest named tier.
+    if (const FanTier* t = lookup_fan_tier(wire_tier)) curve = t->curve;
   }
 
   if (duty >= 0) {
-    if (!device.set_fan_fixed(wire_tier, duty)) {
+    if (!device.set_fan_fixed(duty, curve)) {
       std::cerr << "No response to 'POST fanLCDSet'\n";
       return 1;
     }
@@ -1031,8 +1064,8 @@ static int cmd_upload(const std::string& file, bool verbose) {
 static int cmd_display(const std::string& port,
                        const std::vector<std::string>& files,
                        const std::string& ratio, int brightness,
-                       bool brightness_given, bool keepalive,
-                       int keepalive_interval, bool verbose) {
+                       bool brightness_given, const std::string& play_mode,
+                       bool keepalive, int keepalive_interval, bool verbose) {
   if (brightness < 0 || brightness > 100) {
     std::cerr << "Brightness must be 0-100\n";
     return 1;
@@ -1093,6 +1126,9 @@ static int cmd_display(const std::string& port,
   reed::ScreenConfig config;
   config.media = media_files;
   config.ratio = ratio;
+  // Without this the struct default ("Single") went out on every call, so a
+  // multi-file `display` only ever showed the first file.
+  config.play_mode = play_mode.empty() ? state->play_mode : play_mode;
 
   device.set_screen_config(config);
   const int effective_brightness =
@@ -1118,6 +1154,7 @@ static int cmd_display(const std::string& port,
   if (brightness_given) state->brightness = brightness;
   state->media = media_files;
   state->ratio = ratio;
+  state->play_mode = config.play_mode;
   state->preset.reset();  // custom media and a preset are mutually exclusive
   reed::ConfigManager::save_state(*state);
 
@@ -1365,9 +1402,11 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     }
     if (state->fan_tier) {
       if (state->fan_duty) {
-        dev.set_fan_fixed(*state->fan_tier, *state->fan_duty);
+        const FanTier* t = lookup_fan_tier(*state->fan_tier);
+        dev.set_fan_fixed(*state->fan_duty, t ? t->curve : reed::FanCurve{});
       } else {
-        dev.set_fan_smart(*state->fan_tier);
+        const FanTier* t = lookup_fan_tier(*state->fan_tier);
+        dev.set_fan_smart(t ? t->curve : reed::FanCurve{}, t ? t->duty : 40);
       }
     }
     if (state->preset) {
@@ -1847,6 +1886,7 @@ int main(int argc, char* argv[]) {
   std::string port = config.port;
   bool verbose = false;
   std::string ratio = "2:1";
+  std::string play_mode;  // empty = keep whatever is saved
   int brightness = config.brightness;
   bool keepalive = false;
   bool foreground = false;
@@ -1872,6 +1912,32 @@ int main(int argc, char* argv[]) {
       }
     } else if (arg == "-v" || arg == "--verbose") {
       verbose = true;
+    } else if (arg == "--play-mode") {
+      if (i + 1 >= argc) {
+        std::cerr << "--play-mode needs a value: single|shuffle|loop\n";
+        return 1;
+      }
+      const std::string want = argv[++i];
+      bool matched = false;
+      for (const char* v : {"Single", "Shuffle", "Loop"}) {
+        std::string lower;
+        for (char c : std::string(v)) {
+          lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        std::string given;
+        for (char c : want) {
+          given += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (given == lower) {
+          play_mode = v;
+          matched = true;
+        }
+      }
+      if (!matched) {
+        std::cerr << "Unknown play mode: \"" << want
+                  << "\"  (use single|shuffle|loop)\n";
+        return 1;
+      }
     } else if (arg == "--ratio") {
       if (++i < argc) ratio = argv[i];
     } else if (arg == "--brightness") {
@@ -1996,7 +2062,7 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_display(port, args, ratio, brightness, brightness_given,
-                       keepalive, keepalive_interval, verbose);
+                       play_mode, keepalive, keepalive_interval, verbose);
   } else if (command == "brightness") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse brightness <0-100>\n";

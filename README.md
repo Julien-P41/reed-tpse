@@ -197,7 +197,7 @@ reed-tpse status                 # Fan/pump RPM, warnings, free storage
 reed-tpse raw <METHOD> <ENDPOINT> [JSON]
                                  # Send any command, print the response
 reed-tpse upload <file>          # Upload media file
-reed-tpse display <file>         # Set display content
+reed-tpse display <file...>      # Set display content (playlist if >1 file)
 reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
@@ -216,6 +216,30 @@ reed-tpse hud status             # Show current HUD configuration
 
 Add `--system` to any `daemon` subcommand to address the system-scope unit
 instead of the user-scope one.
+
+### Playlists
+
+`display` takes more than one file, and `--play-mode` decides how the device
+walks the list:
+
+```bash
+reed-tpse display clip-a.mp4 clip-b.mp4 --play-mode loop
+reed-tpse display a.png b.png c.png --play-mode shuffle
+reed-tpse display just-this.mp4 --play-mode single
+```
+
+| Mode | Behaviour |
+|---|---|
+| `single` | plays the first entry only (the firmware default) |
+| `loop` | walks the list in order, repeating |
+| `shuffle` | walks the list in random order |
+
+`media` is a flat array on the wire, and the device accepts `mp4`, `png` and
+`gif`, so a playlist can mix stills and video. The mode is saved in
+`display.json` and re-applied by the daemon.
+
+⚠ Before this existed, `display` always sent `playMode: "Single"` regardless of
+how many files were listed -- so a multi-file `display` showed only the first.
 
 ### Status
 
@@ -251,22 +275,26 @@ reed-tpse fan --reset      # hand back to the firmware's own curve
 Pump RPM is not repeated here -- `reed-tpse status` reports it, and it is
 driven by the motherboard/BIOS rather than by this tool.
 
-The named tiers start at the firmware's own default and climb linearly to
-full. Measured on firmware V1.0.11 (Panorama 360 ARGB):
+The tiers are the vendor's own, read off the wire from KANALI 1.2.1 -- one
+`fanLCDSet` capture per tier. A tier is a **pair**: a fixed duty *and* a
+temperature curve, and the app sends both together whichever mode is active.
 
-| Tier | Duty | RPM |
+| Tier | `fixedMode` | Smart curve `[°C, duty%]` |
 |---|---|---|
-| `low` | 35% | ~2010 |
-| `mid` | 57% | ~2880 |
-| `high` | 78% | ~3570 |
-| `full` | 100% | 4170 |
-| `--reset` | — | ~2040 (firmware curve) |
+| `low` | 40% | `[0,10] [10,20] [30,30] [50,40] [65,55] [80,70] [90,100] [100,100]` |
+| `mid` | 60% | `[0,10] [10,20] [30,35] [50,50] [65,75] [80,80] [90,100] [100,100]` |
+| `high` | 80% | `[0,10] [10,20] [30,50] [40,70] [55,85] [70,90] [90,100] [100,100]` |
+| `full` | 100% | `[0,10] [10,20] [30,70] [40,100] [65,100] [80,100] [90,100] [100,100]` |
+| `--reset` | 40% | the `low` curve, in Smart Mode -- the vendor default |
 
-`--speed <0-100>` sets any duty directly; the response is monotonic but not
-linear in RPM (45% ≈ 2460, 65% ≈ 3150). The tier *name* sent to the device is
-decorative on this firmware -- with empty curve arrays all four tiers measured
-identical RPM -- so the duty is what actually matters, and `--speed` sends the
-nearest tier name purely so the device's model carries a sensible label.
+⚠ An earlier version of this table read 35/57/78/100. Those were interpolated
+by hand from RPM measurements before the vendor's real values were known;
+`low` in particular was 35%, not 40%. RPM measured here at the old duties:
+35% ≈ 2010, 57% ≈ 2880, 78% ≈ 3570, 100% = 4170, and the response is monotonic
+but not linear (45% ≈ 2460, 65% ≈ 3150).
+
+`--speed <0-100>` sets any duty directly, pairing it with the curve of the
+nearest named tier -- KANALI never sends a duty without a curve beside it.
 
 #### How it actually works
 
@@ -292,15 +320,22 @@ vendor app's four-tier payload is largely discarded by this firmware. What
 works is:
 
 ```json
-POST fanLCDSet {"speed":"Low Speed","mode":"Fixed Mode","fixedMode":35,"smartMode":[]}
+POST fanLCDSet {"mode":"Fixed Mode",
+                "smartMode":[[0,10],[10,20],[30,30],[50,40],
+                             [65,55],[80,70],[90,100],[100,100]],
+                "fixedMode":40}
 ```
 
-⚠ **`fixedMode` is an `int`.** Sending it as an array (an earlier inference from
-the vendor app's chart config read it as `[[tempC, dutyPercent], ...]`) coerces
-to 0 and **stops the fan dead**. It stayed at 0 RPM through every telemetry
-value tried, including an all-100% profile; only an empty-curve profile restored
-it. `fan --profile` refuses that shape for exactly this reason -- both the flat
-form and the vendor's nested per-tier form.
+Three keys, and that is all -- the vendor never sends the `speed` field even
+though the device's model carries one, and it always sends **both** the curve
+and a numeric `fixedMode` regardless of mode. `smartMode` is 8 `[°C, duty%]`
+points, ascending in both axes, pinned at temp 0 and `[100,100]`.
+
+⚠ **`fixedMode` must be a number.** Sending an array there coerces to 0 and
+**stops the fan dead** -- 0 RPM through every telemetry value tried, including
+an all-100% profile. The `[[tempC, dutyPercent], ...]` curve shape guessed
+earlier was in fact right; what killed the fan was the `fixedMode` beside it.
+`fan --profile` now validates the pairs and requires a numeric `fixedMode`.
 
 **A telemetry push latches the profile; after that it holds on its own.**
 Installing `fixedMode: 100` and waiting 48s changed nothing, then a *single*
@@ -509,6 +544,10 @@ not an error, and it is not proof of success — `raw` says so explicitly rather
 than reporting success. Endpoints that control cooling hardware
 (`fanLCDSet`, `turboPump`) should be read before they are written; verify any
 write by re-reading `STATE all` and checking that the value actually moved.
+
+Confirmed payloads, captured from KANALI 1.2.1 on this firmware, are in
+[docs/vendor-protocol.md](docs/vendor-protocol.md) -- that file is the
+authority where it and this one disagree.
 
 Endpoints seen in the vendor application's own dispatcher:
 
@@ -775,25 +814,38 @@ onDoBrightness             onDoPower     onWaterfallModeChange
 onFileUpload               nameTitleChange
 ```
 
-That list is a useful predictor: an endpoint with no corresponding callback
-cannot do anything however well-formed the payload is.
+That list looked like a useful predictor: an endpoint with no corresponding
+callback should not be able to do anything however well-formed the payload is.
+**It has now mispredicted twice** -- `waterfallMode` and `rotate` both work,
+and both apply only at the next device restart, so a live check sees nothing.
+Treat it as a hint about the live path, not as evidence an endpoint is inert.
 
-**`rotate` is "Mirror Mode", and it is not implemented on firmware V1.0.11.**
-The vendor app calls it Mirror Mode -- *"a mirror image of PANORAMA screen for
-users with a left-mounted chassis"* -- and warns that *"PANORAMA water cooling
-will restart upon confirming"*. So it is a persisted setting applied at boot,
-not a live transform, which means the absent callback below is not by itself
-evidence of anything. What settles it is that the firmware carries no
-app-specific mirror implementation and the dispatcher has no reboot path, on
-top of the empirical results. It is dispatched and parsed
--- `POST rotate {"degree":180}` logs a handler-specific `rotate--180`, which a
-bogus endpoint never produces -- but there is no rotation callback in the
-interface above, no rotate field on the device's `ScreenConfig` entity, and no
-app-specific rotation symbol anywhere in `HomeUI.apk`. Confirmed empirically
-too: Android's own `mRotation` stays `ROTATION_0` across `degree` values of
-0/90/180/270, string and integer forms, alternate field names, and after each of
-the plausible "latches" (a telemetry push, `conn`, and a screen-config
-re-apply). It is therefore not exposed as a command.
+**`rotate` is "Mirror Mode", and it works.** Captured from KANALI 1.2.1 on
+this firmware:
+
+```
+POST rotate {"degree":90}   -> 200, then the device restarts and
+                               re-enumerates on a new USB address
+POST rotate {"degree":270}  -> 200, restarts again
+```
+
+Only two values are ever used, and they are 180° apart: **270 is this unit's
+baseline and 90 is the mirrored state**, which fits the vendor's own wording --
+*"a mirror image of PANORAMA screen for users with a left-mounted chassis"* --
+and its warning that *"PANORAMA water cooling will restart upon confirming"*.
+The value is also a field inside the `config` blob (`waterBlockScreen.rotate`),
+re-asserted on every connect.
+
+⚠ **This corrects an earlier conclusion here that `rotate` was unimplemented on
+V1.0.11.** That was measured by watching Android's `mRotation` for a live
+transform across `degree` values and after several plausible "latches". The
+setting is stored and applied at the next restart, so nothing was ever going to
+show up in the window being measured -- the same trap as `waterfallMode`, and
+the second time the missing-callback heuristic below mispredicted.
+
+⚠ Because the baseline is 270, sending a neutral-looking `degree: 0` or `180`
+leaves the panel **90° out**, which is indistinguishable at a glance from
+waterfall mode.
 
 `screenFlip` is not a device endpoint at all; the vendor app implements it by
 mapping a boolean onto `rotate`'s `degree`, so it is inert here for the same

@@ -449,7 +449,10 @@ std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
   }
 
   picojson::object filter;
-  filter["value"] = picojson::value("");
+  // null, not "": the vendor's "no filter" is a JSON null.
+  filter["value"] = config.settings.filter.empty()
+                        ? picojson::value()
+                        : picojson::value(config.settings.filter);
   filter["opacity"] =
       picojson::value(static_cast<double>(config.settings.filter_opacity));
 
@@ -471,7 +474,8 @@ std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
   }
 
   picojson::object cfg;
-  cfg["Type"] = picojson::value("Custom");
+  // No "Type" key: that was ours. KANALI sends `id` alone to pick between
+  // custom media ("Customization") and a preset ("Pre-set N: Name").
   cfg["id"] = picojson::value("Customization");
   cfg["screenMode"] = picojson::value(config.screen_mode);
   cfg["ratio"] = picojson::value(config.ratio);
@@ -496,13 +500,17 @@ std::optional<Response> Device::set_brightness(int value) {
 }
 
 std::optional<Response> Device::delete_media(
-    const std::vector<std::string>& files) {
+    const std::vector<std::string>& files, bool keep_listed) {
   picojson::array file_arr;
   for (const auto& f : files) {
     file_arr.push_back(picojson::value(f));
   }
   picojson::object obj;
-  obj["include"] = picojson::value(file_arr);
+  // Both keys are real, and they are opposites. KANALI sends `exclude` after
+  // every upload to garbage-collect anything not in its library, and
+  // `include` to delete named files. `type` is required; only "custom" seen.
+  obj["type"] = picojson::value(std::string("custom"));
+  obj[keep_listed ? "exclude" : "include"] = picojson::value(file_arr);
   std::string content = picojson::value(obj).serialize();
   return send_command("POST", "mediaDelete", content);
 }
@@ -653,44 +661,52 @@ std::optional<Response> Device::set_fan_profile(const std::string& json) {
   return send_command("POST", "fanLCDSet", json);
 }
 
-std::optional<Response> Device::set_fan_fixed(const std::string& tier,
-                                              int duty) {
+namespace {
+
+// {mode, smartMode, fixedMode} -- byte-for-byte the shape KANALI 1.2.1 puts on
+// the wire. No `speed`, and fixedMode is always a number even in Smart Mode.
+std::string fan_payload(const std::string& mode, const FanCurve& curve,
+                        int fixed_duty) {
+  picojson::array points;
+  for (const auto& [temp, duty] : curve) {
+    picojson::array point;
+    point.push_back(picojson::value(static_cast<double>(temp)));
+    point.push_back(picojson::value(static_cast<double>(duty)));
+    points.push_back(picojson::value(point));
+  }
+
   picojson::object obj;
-  obj["speed"] = picojson::value(tier);
-  obj["mode"] = picojson::value(std::string("Fixed Mode"));
-  // int, not an array: sending an array here coerces to 0 and stops the fan.
-  obj["fixedMode"] = picojson::value(static_cast<double>(duty));
-  obj["smartMode"] = picojson::value(picojson::array());
-  return set_fan_profile(picojson::value(obj).serialize());
+  obj["mode"] = picojson::value(mode);
+  obj["smartMode"] = picojson::value(points);
+  obj["fixedMode"] = picojson::value(static_cast<double>(fixed_duty));
+  return picojson::value(obj).serialize();
 }
 
-std::optional<Response> Device::set_fan_smart(const std::string& tier) {
-  picojson::object obj;
-  obj["speed"] = picojson::value(tier);
-  obj["mode"] = picojson::value(std::string("Smart Mode"));
-  obj["smartMode"] = picojson::value(picojson::array());
-  return set_fan_profile(picojson::value(obj).serialize());
+// The vendor's "low" tier, and the same curve its `config` blob ships as the
+// factory default.
+const FanCurve kDefaultCurve = {{0, 10},  {10, 20}, {30, 30},  {50, 40},
+                                {65, 55}, {80, 70}, {90, 100}, {100, 100}};
+
+}  // namespace
+
+std::optional<Response> Device::set_fan_fixed(int duty, const FanCurve& curve) {
+  return set_fan_profile(
+      fan_payload("Fixed Mode", curve.empty() ? kDefaultCurve : curve, duty));
+}
+
+std::optional<Response> Device::set_fan_smart(const FanCurve& curve,
+                                              int fixed_duty) {
+  return set_fan_profile(
+      fan_payload("Smart Mode", curve.empty() ? kDefaultCurve : curve,
+                  fixed_duty));
 }
 
 std::optional<Response> Device::reset_fan_profile() {
-  picojson::object tier;
-  tier["mode"] = picojson::value(std::string("Smart Mode"));
-  tier["smartMode"] = picojson::value(picojson::array());
-  tier["fixedMode"] = picojson::value(picojson::array());
-
-  picojson::object profile;
-  profile["speed"] = picojson::value(std::string("Full Speed"));
-  for (const char* k : {"lowSpeed", "midSpeed", "highSpeed", "fullSpeed"}) {
-    profile[k] = picojson::value(tier);
-  }
-  set_fan_profile(picojson::value(profile).serialize());
-
-  // The profile alone changes nothing; the tier/mode selection is what the
-  // device acts on once telemetry arrives.
-  picojson::object sel;
-  sel["speed"] = picojson::value(std::string("Full Speed"));
-  sel["mode"] = picojson::value(std::string("Smart Mode"));
-  return send_command("POST", "fanLCD", picojson::value(sel).serialize());
+  // The vendor default, verbatim: Smart Mode on the low curve, fixedMode 40.
+  // The previous recovery here installed four tier sub-objects with empty
+  // curves and `fixedMode: []`; that is the payload family that stopped the
+  // fan at 0 RPM, and no tier selection would restart it.
+  return set_fan_smart(kDefaultCurve, 40);
 }
 
 std::optional<Response> Device::set_temperature_unit(const std::string& unit) {

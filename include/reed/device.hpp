@@ -19,12 +19,21 @@ struct DeviceInfo {
 };
 
 struct DisplaySettings {
+  // `position` is ours, not the vendor's: KANALI only ever sends `align`.
+  // Kept because the firmware may honour it, but treat it as unverified.
   std::string position = "Top";     // "Top", "Center", "Bottom"
   std::string color = "#FFFFFF";    // hex
   std::string align = "Center";     // "Left", "Center", "Right"
   std::vector<std::string> badges;  // "CPU Badge", "GPU Badge"
+  // Overlay filter drawn across the media. KANALI sends null for "none";
+  // "Rain" and "Smoke" are the two names seen on the wire.
+  std::string filter;               // empty = none
   int filter_opacity = 0;           // 0-100
 };
+
+// LCD-fan curve: [temperature in degC, duty in percent], ascending in both.
+// KANALI always sends exactly 8 points, first at 0 degC and last at 100/100.
+using FanCurve = std::vector<std::pair<int, int>>;
 
 struct ScreenConfig {
   std::vector<std::string> media;
@@ -104,7 +113,11 @@ class Device {
   std::optional<DeviceStatus> get_status();
   std::optional<Response> set_screen_config(const ScreenConfig& config);
   std::optional<Response> set_brightness(int value);
-  std::optional<Response> delete_media(const std::vector<std::string>& files);
+  // keep_listed=false deletes the named files (`include`); keep_listed=true
+  // deletes everything NOT named (`exclude`) -- the vendor's post-upload
+  // sweep. Unused by the CLI, which deletes over adb instead.
+  std::optional<Response> delete_media(const std::vector<std::string>& files,
+                                       bool keep_listed = false);
 
   // HUD: on-device telemetry overlay support.
   // Firmware renders up to 3 metrics from a fixed label set on top of the
@@ -136,11 +149,10 @@ class Device {
   // prefix is not dispatched at all.
   std::optional<Response> set_preset(const std::string& id);
 
-  // Reset the LCD-fan profile to the firmware's own behaviour by installing a
-  // four-tier profile with empty curve arrays, then selecting Full Speed /
-  // Smart Mode. This is the known-safe recovery from a bad profile: with empty
-  // arrays the device falls back to its default, and the fan returns to its
-  // normal speed on the next telemetry push.
+  // Restore the vendor's own default fan setting: Smart Mode on the "low"
+  // curve with fixedMode 40, exactly the payload KANALI 1.2.1 sends. Replaces
+  // an earlier recovery that installed empty curve arrays and a numeric-less
+  // `fixedMode` -- that shape is what stopped the fan dead at 0 RPM.
   std::optional<Response> reset_fan_profile();
 
   // Set the LCD fan to a fixed duty. `tier` is the vendor's tier name and
@@ -148,20 +160,22 @@ class Device {
   // 50 -> 2640, 75 -> 3510, 100 -> 4170; the firmware's own default sits
   // around 35% (2040 RPM).
   //
-  // The device's FanLCD model is FLAT -- speed:String, mode:String,
-  // fixedMode:int, smartMode:ArrayList -- with no per-tier sub-objects. The
-  // vendor app's four-tier payload is largely discarded by this firmware.
+  // Both fan calls send the vendor's exact payload: {mode, smartMode,
+  // fixedMode} and nothing else. KANALI never sends the `speed` field even
+  // though the device's FanLCD model carries one, and it always sends BOTH
+  // the curve and a numeric fixedMode whichever mode is selected -- sending
+  // a non-numeric fixedMode is what stops the fan.
   //
   // A profile alone does nothing: the device only acts on it when host
-  // telemetry (POST all) arrives, so the daemon must be pushing.
-  std::optional<Response> set_fan_fixed(const std::string& tier, int duty);
+  // telemetry arrives, so the daemon must be pushing.
+  std::optional<Response> set_fan_fixed(int duty, const FanCurve& curve);
 
-  // Hand the fan back to the firmware's own curve. The smartMode array is
-  // sent empty because its element values are not known yet.
-  std::optional<Response> set_fan_smart(const std::string& tier);
+  // Temperature-following mode. The curve is now known from captured vendor
+  // traffic, so this sends a real one rather than an empty array.
+  std::optional<Response> set_fan_smart(const FanCurve& curve,
+                                        int fixed_duty);
 
-  // Install a raw fan profile. The curve array element shape is NOT known --
-  // see the warning on cmd_fan. Callers are expected to have validated it.
+  // Install a raw fan profile. Callers are expected to have validated it.
   std::optional<Response> set_fan_profile(const std::string& json);
 
  private:
