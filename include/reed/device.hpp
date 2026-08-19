@@ -113,6 +113,12 @@ class Device {
   std::optional<DeviceStatus> get_status();
   std::optional<Response> set_screen_config(const ScreenConfig& config);
   std::optional<Response> set_brightness(int value);
+
+  // Panel power. `false` blanks the display outright -- distinct from
+  // brightness 0 and from the sleep-mode fallback. The vendor's screen
+  // on/off toggle, and the one thing it sends after `config` on every
+  // connect.
+  std::optional<Response> set_screen_power(bool enable);
   // keep_listed=false deletes the named files (`include`); keep_listed=true
   // deletes everything NOT named (`exclude`) -- the vendor's post-upload
   // sweep. Unused by the CLI, which deletes over adb instead.
@@ -125,6 +131,13 @@ class Device {
   std::optional<Response> send_sysinfo(const std::vector<SysinfoData>& data);
   std::optional<Response> set_sysinfo_display(
       const std::vector<std::string>& labels);
+
+  // The vendor's overlay command: styling and metric list in one frame,
+  // without touching the media. `POST preset` -- unrelated to the screen
+  // presets, despite the name. KANALI never sends `sysinfoDisplay` on its
+  // own; this is how the HUD is configured.
+  std::optional<Response> set_overlay(const DisplaySettings& settings,
+                                      const std::vector<std::string>& metrics);
   std::optional<Response> send_spec(const std::string& cpu_name,
                                     const std::string& gpu_name);
   std::optional<Response> set_temperature_unit(const std::string& unit);
@@ -147,7 +160,12 @@ class Device {
   // spaces turned into underscores. It does not check the file exists -- a
   // name it cannot resolve simply blanks the panel -- and a bare name with no
   // prefix is not dispatched at all.
-  std::optional<Response> set_preset(const std::string& id);
+  // The vendor sends `settings` and `sysinfoDisplay` alongside the id, which
+  // is why picking a preset in KANALI also restores its overlay styling. Pass
+  // the same values the current screen config uses.
+  std::optional<Response> set_preset(const std::string& id,
+                                     const DisplaySettings& settings,
+                                     const std::vector<std::string>& sysinfo);
 
   // Restore the vendor's own default fan setting: Smart Mode on the "low"
   // curve with fixedMode 40, exactly the payload KANALI 1.2.1 sends. Replaces

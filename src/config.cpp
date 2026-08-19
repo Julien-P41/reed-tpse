@@ -197,9 +197,16 @@ std::optional<DisplayState> ConfigManager::load_state() {
   state.screen_mode = get_string(json, "screen_mode", state.screen_mode);
   state.play_mode = get_string(json, "play_mode", state.play_mode);
   state.brightness = get_int(json, "brightness", state.brightness);
+  state.filter = get_string(json, "filter", state.filter);
+  state.filter_opacity = get_int(json, "filter_opacity", state.filter_opacity);
   if (json.is<picojson::object>() &&
       json.get<picojson::object>().count("display_in_sleep")) {
     state.display_in_sleep = get_bool(json, "display_in_sleep", false);
+  }
+
+  if (json.is<picojson::object>() &&
+      json.get<picojson::object>().count("screen_on")) {
+    state.screen_on = get_bool(json, "screen_on", true);
   }
 
   {
@@ -257,9 +264,15 @@ bool ConfigManager::save_state(const DisplayState& state) {
   obj["screen_mode"] = picojson::value(state.screen_mode);
   obj["play_mode"] = picojson::value(state.play_mode);
   obj["brightness"] = picojson::value(static_cast<double>(state.brightness));
+  obj["filter"] = picojson::value(state.filter);
+  obj["filter_opacity"] =
+      picojson::value(static_cast<double>(state.filter_opacity));
   // Written only once configured, so an untouched device is never overridden.
   if (state.display_in_sleep) {
     obj["display_in_sleep"] = picojson::value(*state.display_in_sleep);
+  }
+  if (state.screen_on) {
+    obj["screen_on"] = picojson::value(*state.screen_on);
   }
   if (state.preset) {
     obj["preset"] = picojson::value(*state.preset);

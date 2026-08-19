@@ -442,31 +442,39 @@ std::optional<DeviceInfo> Device::handshake() {
   return info;
 }
 
+namespace {
+
+// The `settings` block, shared by screen configs and presets.
+picojson::object settings_object(const DisplaySettings& in) {
+  picojson::object filter;
+  // null, not "": the vendor's "no filter" is a JSON null.
+  filter["value"] =
+      in.filter.empty() ? picojson::value() : picojson::value(in.filter);
+  filter["opacity"] = picojson::value(static_cast<double>(in.filter_opacity));
+
+  picojson::array badges_arr;
+  for (const auto& b : in.badges) {
+    badges_arr.push_back(picojson::value(b));
+  }
+
+  picojson::object out;
+  out["position"] = picojson::value(in.position);
+  out["color"] = picojson::value(in.color);
+  out["align"] = picojson::value(in.align);
+  out["badges"] = picojson::value(badges_arr);
+  out["filter"] = picojson::value(filter);
+  return out;
+}
+
+}  // namespace
+
 std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
   picojson::array media_arr;
   for (const auto& m : config.media) {
     media_arr.push_back(picojson::value(m));
   }
 
-  picojson::object filter;
-  // null, not "": the vendor's "no filter" is a JSON null.
-  filter["value"] = config.settings.filter.empty()
-                        ? picojson::value()
-                        : picojson::value(config.settings.filter);
-  filter["opacity"] =
-      picojson::value(static_cast<double>(config.settings.filter_opacity));
-
-  picojson::array badges_arr;
-  for (const auto& b : config.settings.badges) {
-    badges_arr.push_back(picojson::value(b));
-  }
-
-  picojson::object settings;
-  settings["position"] = picojson::value(config.settings.position);
-  settings["color"] = picojson::value(config.settings.color);
-  settings["align"] = picojson::value(config.settings.align);
-  settings["badges"] = picojson::value(badges_arr);
-  settings["filter"] = picojson::value(filter);
+  picojson::object settings = settings_object(config.settings);
 
   picojson::array sysinfo_arr;
   for (const auto& label : config.sysinfo_display) {
@@ -497,6 +505,13 @@ std::optional<Response> Device::set_brightness(int value) {
   obj["value"] = picojson::value(static_cast<double>(value));
   std::string content = picojson::value(obj).serialize();
   return send_command("POST", "brightness", content);
+}
+
+std::optional<Response> Device::set_screen_power(bool enable) {
+  picojson::object obj;
+  obj["enable"] = picojson::value(enable);
+  return send_command("POST", "waterBlockScreen",
+                      picojson::value(obj).serialize());
 }
 
 std::optional<Response> Device::delete_media(
@@ -625,6 +640,19 @@ std::optional<Response> Device::set_sysinfo_display(
   return send_command("POST", "sysinfoDisplay", content, false);
 }
 
+std::optional<Response> Device::set_overlay(
+    const DisplaySettings& settings, const std::vector<std::string>& metrics) {
+  picojson::array items;
+  for (const auto& m : metrics) {
+    items.push_back(picojson::value(m));
+  }
+
+  picojson::object obj;
+  obj["settings"] = picojson::value(settings_object(settings));
+  obj["sysinfoDisplay"] = picojson::value(items);
+  return send_command("POST", "preset", picojson::value(obj).serialize());
+}
+
 std::optional<Response> Device::send_spec(const std::string& cpu_name,
                                           const std::string& gpu_name) {
   picojson::object obj;
@@ -647,9 +675,19 @@ std::optional<Response> Device::send_power_event(const std::string& event) {
   return send_command("POST", "power", picojson::value(obj).serialize());
 }
 
-std::optional<Response> Device::set_preset(const std::string& id) {
+std::optional<Response> Device::set_preset(
+    const std::string& id, const DisplaySettings& settings,
+    const std::vector<std::string>& sysinfo) {
   picojson::object obj;
   obj["id"] = picojson::value(id);
+  obj["settings"] = picojson::value(settings_object(settings));
+
+  picojson::array sysinfo_arr;
+  for (const auto& label : sysinfo) {
+    sysinfo_arr.push_back(picojson::value(label));
+  }
+  obj["sysinfoDisplay"] = picojson::value(sysinfo_arr);
+
   std::string content = picojson::value(obj).serialize();
   // Same double-send as set_screen_config: the first POST is unreliable.
   send_command("POST", "waterBlockScreenId", content);

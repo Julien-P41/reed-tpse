@@ -46,6 +46,14 @@ struct DisplayState {
   // alone"; the setting is volatile on the device (it is lost whenever USB
   // power is cut), so once set it has to be re-applied by the daemon.
   std::optional<bool> display_in_sleep;
+  // Panel power. Unset means never configured; the daemon only asserts it
+  // once it has been set explicitly, so an untouched device is left alone.
+  std::optional<bool> screen_on;
+  // Overlay filter drawn across the media -- "Rain" or "Smoke" on the wire,
+  // empty for none -- with its opacity. Part of `settings`, so it rides along
+  // with every screen-config change.
+  std::string filter;
+  int filter_opacity = 100;
   // Set when a firmware preset is showing. Mutually exclusive with `media`:
   // the daemon re-applies whichever one is active.
   std::optional<std::string> preset;

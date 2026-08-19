@@ -47,8 +47,10 @@ static void print_usage(const char* prog) {
          "  upload <file>           Upload media file (converts GIF to MP4)\n"
          "  display <file...>       Set display to specified media files\n"
          "                          (--play-mode single|shuffle|loop for a\n"
-         "                           multi-file playlist)\n"
+         "                           multi-file playlist;\n"
+         "                           --filter Rain|Smoke|none --opacity 0-100)\n"
          "  brightness <0-100>      Set display brightness\n"
+         "  screen <on|off>         Turn the panel itself on or off\n"
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
@@ -57,6 +59,8 @@ static void print_usage(const char* prog) {
          "  power <event>           Tell the device the host state:\n"
          "                          shutdown|lock|unlock|ac|battery\n"
          "  fan [low|mid|high|full] Show LCD fan RPM, or set a named tier\n"
+         "                          (--smart follows temperature, --speed N pins\n"
+         "                           a duty, --reset restores the vendor default)\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
          "  daemon start            Start background daemon\n"
@@ -415,6 +419,42 @@ static int cmd_raw(const std::string& port, const std::string& method,
   return 0;
 }
 
+// Panel power, the vendor's screen on/off. Not the same as brightness 0:
+// `enable:false` blanks the panel entirely, and the setting is volatile like
+// everything else here, so the daemon re-asserts it on connect.
+static int cmd_screen(const std::string& port, const std::string& arg,
+                      bool verbose) {
+  bool enable;
+  if (arg == "on") {
+    enable = true;
+  } else if (arg == "off") {
+    enable = false;
+  } else {
+    std::cerr << "Usage: reed-tpse screen <on|off>\n";
+    return 1;
+  }
+
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+  device.drain();
+
+  if (!device.set_screen_power(enable)) {
+    std::cerr << "No response to 'POST waterBlockScreen'\n";
+    return 1;
+  }
+
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->screen_on = enable;
+  reed::ConfigManager::save_state(*state);
+
+  std::cout << "Panel " << (enable ? "on" : "off") << "\n";
+  return 0;
+}
+
 static int cmd_sleep_display(const std::string& port, const std::string& arg,
                              bool verbose) {
   bool enable;
@@ -749,7 +789,23 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
   // keeps the name -- but the prefix must be present or the command is not
   // dispatched at all.
   const std::string id = "Pre-set 1: " + match;
-  if (!device.set_preset(id)) {
+
+  // Carry the stored overlay styling and metrics with the preset, the way the
+  // vendor does -- otherwise selecting a preset silently drops the HUD.
+  auto prev = reed::ConfigManager::load_state();
+  reed::DisplaySettings settings;
+  std::vector<std::string> sysinfo;
+  if (prev) {
+    settings.position = prev->hud.position;
+    settings.align = prev->hud.align;
+    settings.color = prev->hud.color;
+    settings.badges = prev->hud.badges;
+    settings.filter = prev->filter;
+    settings.filter_opacity = prev->filter_opacity;
+    if (prev->hud.enabled) sysinfo = prev->hud.metrics;
+  }
+
+  if (!device.set_preset(id, settings, sysinfo)) {
     std::cerr << "No response to 'POST waterBlockScreenId'\n";
     return 1;
   }
@@ -870,7 +926,7 @@ static const char* nearest_tier_name(int duty) {
 }
 
 static int cmd_fan(const std::string& port, bool reset,
-                   const std::string& tier_arg, int duty_arg,
+                   const std::string& tier_arg, int duty_arg, bool smart,
                    const std::string& profile_path, bool force, bool verbose) {
   reed::Device device(port, verbose);
   if (!device.connect()) {
@@ -950,7 +1006,11 @@ static int cmd_fan(const std::string& port, bool reset,
   }
 
   if (duty >= 0) {
-    if (!device.set_fan_fixed(duty, curve)) {
+    // Smart Mode follows the curve; Fixed Mode pins the duty. The vendor
+    // sends both fields either way, so the only difference is `mode`.
+    const bool ok = smart ? static_cast<bool>(device.set_fan_smart(curve, duty))
+                          : static_cast<bool>(device.set_fan_fixed(duty, curve));
+    if (!ok) {
       std::cerr << "No response to 'POST fanLCDSet'\n";
       return 1;
     }
@@ -959,15 +1019,38 @@ static int cmd_fan(const std::string& port, bool reset,
     // telemetry arrives. Push one frame so the setting takes effect now rather
     // than waiting for a daemon -- which matters at boot, where the fan would
     // otherwise sit at the firmware default until the daemon starts.
-    device.send_sysinfo({});
+    //
+    // The frame must carry a REAL CPU temperature. An empty push is all
+    // zeroes, and in Smart Mode the curve reads 0 degC and drops the fan to
+    // its floor -- 10% on every vendor curve.
+    reed::SystemMonitor monitor;
+    monitor.sample();  // primes the /proc/stat delta; first sample is cold
+    const reed::SystemMetrics metrics = monitor.sample();
+    device.send_sysinfo(build_sysinfo({"CPU Temperature", "GPU Temperature"},
+                                      metrics));
 
     auto state = reed::ConfigManager::load_state();
     if (!state) state = reed::DisplayState{};
     state->fan_tier = wire_tier;
-    state->fan_duty = duty;
+    // An unset duty is the daemon's marker for Smart Mode, so it re-applies
+    // the same mode it was given rather than pinning the curve's fixed value.
+    if (smart) {
+      state->fan_duty.reset();
+    } else {
+      state->fan_duty = duty;
+    }
     reed::ConfigManager::save_state(*state);
 
-    std::cout << "Fan set to " << duty << "% duty.\n";
+    if (smart) {
+      std::cout << "Fan set to Smart Mode on the " << wire_tier
+                << " curve (fixed fallback " << duty << "%).\n"
+                << "  Duty now follows the CPU temperature being pushed ("
+                << static_cast<int>(metrics.cpu.temperature_c) << "°C).\n"
+                << "  ⚠ Smart Mode needs the daemon running: with nothing\n"
+                << "    pushing, the device keeps the last value it saw.\n";
+    } else {
+      std::cout << "Fan set to " << duty << "% duty.\n";
+    }
     if (duty == 0) {
       std::cout << "  ⚠ 0% stops the fan. It cools the panel and SoC, and no "
                    "temperature is readable.\n";
@@ -1065,7 +1148,9 @@ static int cmd_display(const std::string& port,
                        const std::vector<std::string>& files,
                        const std::string& ratio, int brightness,
                        bool brightness_given, const std::string& play_mode,
-                       bool keepalive, int keepalive_interval, bool verbose) {
+                       const std::string& filter, bool filter_given,
+                       int filter_opacity, bool opacity_given, bool keepalive,
+                       int keepalive_interval, bool verbose) {
   if (brightness < 0 || brightness > 100) {
     std::cerr << "Brightness must be 0-100\n";
     return 1;
@@ -1129,6 +1214,15 @@ static int cmd_display(const std::string& port,
   // Without this the struct default ("Single") went out on every call, so a
   // multi-file `display` only ever showed the first file.
   config.play_mode = play_mode.empty() ? state->play_mode : play_mode;
+  // Same rule as brightness: an unspecified filter keeps whatever is stored
+  // rather than silently clearing it.
+  config.settings.filter = filter_given ? filter : state->filter;
+  config.settings.filter_opacity =
+      opacity_given ? filter_opacity : state->filter_opacity;
+  config.settings.position = state->hud.position;
+  config.settings.align = state->hud.align;
+  config.settings.color = state->hud.color;
+  config.settings.badges = state->hud.badges;
 
   device.set_screen_config(config);
   const int effective_brightness =
@@ -1155,6 +1249,8 @@ static int cmd_display(const std::string& port,
   state->media = media_files;
   state->ratio = ratio;
   state->play_mode = config.play_mode;
+  state->filter = config.settings.filter;
+  state->filter_opacity = config.settings.filter_opacity;
   state->preset.reset();  // custom media and a preset are mutually exclusive
   reed::ConfigManager::save_state(*state);
 
@@ -1356,6 +1452,10 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       screen_config.settings.align = state->hud.align;
       screen_config.settings.color = state->hud.color;
       screen_config.settings.badges = state->hud.badges;
+    screen_config.settings.filter = state->filter;
+    screen_config.settings.filter_opacity = state->filter_opacity;
+      screen_config.settings.filter = state->filter;
+      screen_config.settings.filter_opacity = state->filter_opacity;
     }
   };
   screen_config.media = state->media;
@@ -1410,7 +1510,8 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       }
     }
     if (state->preset) {
-      dev.set_preset("Pre-set 1: " + *state->preset);
+      dev.set_preset("Pre-set 1: " + *state->preset, screen_config.settings,
+                     screen_config.sysinfo_display);
     } else if (!screen_config.media.empty()) {
       dev.set_screen_config(screen_config);
     }
@@ -1821,17 +1922,18 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
       device.send_spec(h.cpu_name, h.gpu_name);
       device.set_temperature_unit(h.temperature_unit);
 
-      reed::ScreenConfig cfg;
-      cfg.media = state.media;
-      cfg.ratio = state.ratio;
-      cfg.screen_mode = state.screen_mode;
-      cfg.play_mode = state.play_mode;
-      cfg.sysinfo_display = h.metrics;
-      cfg.settings.position = h.position;
-      cfg.settings.align = h.align;
-      cfg.settings.color = h.color;
-      cfg.settings.badges = h.badges;
-      device.set_screen_config(cfg);
+      // `POST preset` carries styling and metrics together and leaves the
+      // media alone -- the vendor's own overlay path. Re-sending a whole
+      // screen config here used to reload the video on every HUD tweak.
+      reed::DisplaySettings settings;
+      settings.position = h.position;
+      settings.align = h.align;
+      settings.color = h.color;
+      settings.badges = h.badges;
+      settings.filter = state.filter;
+      settings.filter_opacity = state.filter_opacity;
+      device.set_overlay(settings, h.enabled ? h.metrics
+                                             : std::vector<std::string>{});
 
       // Prime the overlay with a first sample so the user sees values
       // immediately instead of waiting for the daemon to tick.
@@ -1886,7 +1988,12 @@ int main(int argc, char* argv[]) {
   std::string port = config.port;
   bool verbose = false;
   std::string ratio = "2:1";
+  bool fan_smart = false;
   std::string play_mode;  // empty = keep whatever is saved
+  std::string filter;
+  bool filter_given = false;
+  int filter_opacity = 100;
+  bool opacity_given = false;
   int brightness = config.brightness;
   bool keepalive = false;
   bool foreground = false;
@@ -1912,6 +2019,27 @@ int main(int argc, char* argv[]) {
       }
     } else if (arg == "-v" || arg == "--verbose") {
       verbose = true;
+    } else if (arg == "--smart") {
+      fan_smart = true;
+    } else if (arg == "--filter") {
+      if (i + 1 >= argc) {
+        std::cerr << "--filter needs a name, or \"none\"\n";
+        return 1;
+      }
+      filter = argv[++i];
+      if (filter == "none" || filter == "None") filter.clear();
+      filter_given = true;
+    } else if (arg == "--opacity") {
+      if (i + 1 >= argc) {
+        std::cerr << "--opacity needs a value 0-100\n";
+        return 1;
+      }
+      filter_opacity = std::atoi(argv[++i]);
+      if (filter_opacity < 0 || filter_opacity > 100) {
+        std::cerr << "--opacity must be 0-100\n";
+        return 1;
+      }
+      opacity_given = true;
     } else if (arg == "--play-mode") {
       if (i + 1 >= argc) {
         std::cerr << "--play-mode needs a value: single|shuffle|loop\n";
@@ -2039,7 +2167,7 @@ int main(int argc, char* argv[]) {
     return cmd_sleep_display(port, args[0], verbose);
   } else if (command == "fan") {
     return cmd_fan(port, fan_reset, args.empty() ? std::string() : args[0],
-                   fan_speed, fan_profile, force, verbose);
+                   fan_speed, fan_smart, fan_profile, force, verbose);
   } else if (command == "lock-display") {
     return cmd_lock_display(port, args, brightness, brightness_given, verbose);
   } else if (command == "power") {
@@ -2062,7 +2190,8 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_display(port, args, ratio, brightness, brightness_given,
-                       play_mode, keepalive, keepalive_interval, verbose);
+                       play_mode, filter, filter_given, filter_opacity,
+                       opacity_given, keepalive, keepalive_interval, verbose);
   } else if (command == "brightness") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse brightness <0-100>\n";
@@ -2077,6 +2206,12 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_delete(args);
+  } else if (command == "screen") {
+    if (args.empty()) {
+      std::cerr << "Usage: reed-tpse screen <on|off>\n";
+      return 1;
+    }
+    return cmd_screen(port, args[0], verbose);
   } else if (command == "hud") {
     return cmd_hud(port, args, verbose);
   } else if (command == "daemon") {
