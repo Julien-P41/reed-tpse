@@ -247,6 +247,21 @@ reed-tpse display just-this.mp4 --play-mode single
 ⚠ Before this existed, `display` always sent `playMode: "Single"` regardless of
 how many files were listed -- so a multi-file `display` showed only the first.
 
+### Screen Splitting
+
+```bash
+reed-tpse display left.png right.mp4 --split
+reed-tpse hud config --zone right --metrics "GPU Temperature" --color FF0000
+```
+
+Two zones, each with its own media, metrics, colour and alignment. An unset
+right zone mirrors the left.
+
+⚠ **Two heavy videos will not both play.** With two high-bitrate 2160x1080
+clips one half falls back to the standby animation -- the decoder runs out, not
+the protocol. Two images, two small clips, or one heavy clip beside a light one
+all work. If a half goes to standby, re-encode one side smaller.
+
 ### Filters
 
 An overlay the firmware draws across the media, independent of the HUD:

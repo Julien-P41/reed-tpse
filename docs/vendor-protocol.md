@@ -156,7 +156,9 @@ A preset — same command, `id` swapped, no `ratio`, no `media`:
  "sysinfoDisplay":[]}
 ```
 
-Screen Splitting — two zones as parallel arrays:
+Screen Splitting — two zones as parallel arrays. Both media and both overlays
+work; the one constraint measured on V1.0.11 is decode capacity, see the note
+under the payload:
 
 ```json
 {"id":"Customization","screenMode":"Screen Splitting","playMode":"Single",
@@ -164,6 +166,14 @@ Screen Splitting — two zones as parallel arrays:
  "settings":[{...},{...}],
  "sysinfoDisplay":[[],[]]}
 ```
+
+⚠ **Two heavy video streams at once exceed the decoder.** With two
+high-bitrate clips (400 MB and 172 MB, 2160x1080) one zone falls back to the
+firmware's standby animation. Measured combinations: two PNGs, two small clips,
+and one 400 MB clip beside a 14 KB clip all play in both zones -- only the pair
+of heavy clips fails. Nothing in the payload differs between the cases, and the
+device logs `setLayout1Path` once regardless of how many zones actually render,
+so the log is no guide here.
 
 Notes:
 - There is **no `Type` key**. We were sending `"Type":"Custom"`; it is ours.

@@ -1427,15 +1427,19 @@ static int cmd_display(const std::string& port,
   state->preset.reset();  // custom media and a preset are mutually exclusive
   reed::ConfigManager::save_state(*state);
 
+  // Check for the daemon before opening the port, not after: connect() prints
+  // its own "already open by PID ..." diagnostic, which is noise when handing
+  // over to the daemon is the expected path rather than a failure.
+  if (auto holder =
+          reed::find_port_holder(port.empty() ? "/dev/ttyACM0" : port);
+      holder && holder->comm.find("reed-tpse") != std::string::npos) {
+    std::cout << "Saved. The daemon holds the port and applies it within a "
+                 "second.\n";
+    return 0;
+  }
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
-    if (auto holder = reed::find_port_holder(port.empty() ? "/dev/ttyACM0"
-                                                          : port);
-        holder && holder->comm.find("reed-tpse") != std::string::npos) {
-      std::cout << "Saved. The daemon holds the port and applies it within a "
-                   "second.\n";
-      return 0;
-    }
     std::cerr << "Failed to connect to " << port << "\n";
     return 1;
   }
@@ -1755,11 +1759,21 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
         }
       }
     }
-    // A preset is the one thing `config` cannot express: its `id` block is
-    // built for custom media, so the preset id has to go out separately.
+    // Two things `config` cannot express, both sent separately afterwards.
+    //
+    // A preset, because the `id` block inside `config` is built for custom
+    // media.
     if (state->preset) {
       dev.set_preset("Pre-set 1: " + *state->preset, screen_config.settings,
                      screen_config.sysinfo_display);
+    }
+    // And a split screen. The device parses the two-zone form inside `config`
+    // -- the log shows both media entries and both settings blocks arriving --
+    // but only ever calls setLayout1Path, leaving one half on the previous
+    // media and the other on the standby loop. The same payload sent as its
+    // own waterBlockScreenId drives both zones correctly.
+    if (screen_config.split) {
+      dev.set_screen_config(screen_config);
     }
 
     // Reconnecting during a locked session must land on the lock screen, not
