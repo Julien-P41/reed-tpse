@@ -1574,8 +1574,32 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     return 1;
   }
 
+  // The device answers on serial before its UI app is up -- adbd and the
+  // serial link come back roughly 12s ahead of it after a restart. Settings
+  // applied into that window are accepted and dropped: the panel stays black
+  // and the fan keeps whatever the firmware defaulted to.
+  //
+  // Waiting for the UI beats guessing at a delay. When adb is unavailable
+  // there is nothing to wait on, so the timed re-apply further down stays as
+  // the fallback.
+  auto wait_for_ui = [&](int timeout_sec) {
+    if (!reed::Adb::is_device_connected()) return;
+    for (int waited = 0; waited < timeout_sec; ++waited) {
+      if (reed::Adb::ui_ready()) {
+        if (waited && verbose) {
+          std::cerr << "waited " << waited << "s for the device UI\n";
+        }
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    std::cerr << "warning: device UI still not up after " << timeout_sec
+              << "s; applying anyway\n";
+  };
+
   auto restore = [&](reed::Device& dev) {
     if (!dev.handshake()) return false;
+    wait_for_ui(45);
 
     // One `config` frame carries temperature unit, panel power, sleep mode,
     // brightness, the whole screen block and the fan -- the vendor's own
@@ -1724,13 +1748,11 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   long long cfg_seen = mtime_of(cfg_path);
   long long state_seen = mtime_of(state_path);
 
-  // The device can accept a connection before its UI app is ready: adbd and
-  // the serial link come up well before HomeUI does. Settings pushed into that
-  // window are lost -- media never appears (black panel) and the fan is left in
-  // Smart Mode with a null curve, which the firmware evaluates as 0 RPM. One
-  // re-apply shortly after connecting costs nothing and heals that.
+  // Fallback for the readiness wait above: with no adb there is nothing to
+  // poll, so one blind re-apply still heals a restore that landed too early.
+  // Skipped entirely when adb is available, since the wait already covers it.
   auto reapply_at = clock::now() + std::chrono::seconds(20);
-  bool reapplied = false;
+  bool reapplied = reed::Adb::is_device_connected();
 
   int failures = 0;
   while (g_running) {

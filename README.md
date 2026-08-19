@@ -75,8 +75,10 @@ Done in this fork: `status`, `raw`, `fan`, `preset`, `sleep-display`, `power`
 protocol and config tests, exclusive port locking, the system/user unit split
 and a udev rule.
 
-Not possible on firmware V1.0.11, established rather than assumed: `rotate`
-(unimplemented) and `waterfallMode` (present but SE-only). Details below.
+`rotate` (Mirror Mode) works but applies only at the cooler's next start, so
+`reed-tpse rotate` reboots the device for you. `waterfallMode` is present in
+the firmware but its payload key is unknown and nothing has been observed to
+change; KANALI 1.2.1 has no UI control for it. Details below.
 
 ## Requirements
 
@@ -678,13 +680,23 @@ that window is lost: the media never appears (black panel) and the fan is left
 in Smart Mode with a null curve, which the firmware evaluates as **0 RPM** and
 re-evaluates as 0 on every telemetry push.
 
-The daemon therefore re-applies its settings once, 20s after connecting. If you
-script around a device restart, wait for the app rather than the transport:
+The daemon therefore waits for the UI app before applying anything, polling
+`pidof` over adb for up to 45s after each connect. Where adb is unavailable
+there is nothing to poll, and it falls back to re-applying once, 20s after
+connecting.
+
+If you script around a device restart, wait for the app rather than the
+transport -- `adb wait-for-device` returns when adbd is up, which is about 12s
+too early:
 
 ```bash
-adb wait-for-device                                    # adbd only -- not enough
 until adb shell pidof com.baiyi.homeui.tkcfanhomeui >/dev/null 2>&1; do sleep 2; done
 ```
+
+The one place this does not help is `tryx-boot-sequence.sh`, which deliberately
+stops the daemon to take the port for the boot video. Its own `reed-tpse fan`
+call is still doing real work there: with the daemon stopped, nothing else is
+in a position to settle the fan for the length of the clip.
 
 ## What persists
 
@@ -819,9 +831,10 @@ onFileUpload               nameTitleChange
 
 That list looked like a useful predictor: an endpoint with no corresponding
 callback should not be able to do anything however well-formed the payload is.
-**It has now mispredicted twice** -- `waterfallMode` and `rotate` both work,
-and both apply only at the next device restart, so a live check sees nothing.
-Treat it as a hint about the live path, not as evidence an endpoint is inert.
+**`rotate` breaks it** -- there is no rotation callback, yet the endpoint
+stores a value that turns the panel at the next start. A live check cannot see
+a deferred setting, so treat the list as a hint about the live path, not as
+evidence that an endpoint is inert.
 
 **`rotate` is "Mirror Mode", and it works.** Captured from KANALI 1.2.1 on
 this firmware:
@@ -848,8 +861,8 @@ the `adb reboot` for you, or the command would look inert.
 V1.0.11.** That was measured by watching Android's `mRotation` for a live
 transform across `degree` values and after several plausible "latches". The
 setting is stored and applied at the next restart, so nothing was ever going to
-show up in the window being measured -- the same trap as `waterfallMode`, and
-the second time the missing-callback heuristic below mispredicted.
+show up in the window being measured. Deferred settings are the blind spot of
+every live measurement in this document.
 
 ⚠ Because the baseline is 270, sending a neutral-looking `degree: 0` or `180`
 leaves the panel **90° out**, which is indistinguishable at a glance from
@@ -872,37 +885,40 @@ the media. The firmware carries the implementation
 (`MainActivity.onWaterfallModeChange`, `doWaterfallMode`,
 `changeWaterModelPosition`, `getWaterfallInsets`, `waterfallModePosition`).
 
-**It works, but only after the device is power-cycled.** An earlier round here
-concluded it did nothing: the layout was pixel-identical before and after, and
-`MainActivity`'s own `--onWaterfallModeChange--` never fired across seven
-payload shapes. That was measuring the wrong window. `POST waterfallMode
-{"enable":true}` is stored and applied when the controller next starts -- the
-same "set now, take effect on restart" shape as Mirror Mode, whose dialog warns
-that the cooler restarts on confirmation.
+**Whether it does anything is unverified.** Across seven payload shapes the
+layout was pixel-identical before and after, and `MainActivity`'s own
+`--onWaterfallModeChange--` never fired.
 
-It surfaced by accident: after the AIO was unplugged during cable management,
-the panel came back rotated 90° clockwise, from an `enable:true` sent during
-that earlier testing. So the absence of a live handler call proves nothing here
--- the same trap as `rotate`, and the second time it caught me.
+That result was once read as a measurement artefact, on the strength of a panel
+that came back rotated 90° clockwise after the cooler lost power. That evidence
+does not hold: `rotate` is now known to store a value and apply it at the next
+start, it was sent during the same testing, and 0 or 180 leaves this panel 90°
+off upright. Waterfall mode moves the sysinfo overlay, not the media -- a whole
+rotated picture is `rotate`'s signature, not this one's.
 
-To turn it off, send the `false` form and restart the device. `adb reboot`
-restarts the AIO alone -- no PC shutdown needed, and this hardware records
-`reboot,shell` in `persist.sys.boot.reason.history` from previous ones. It is an
-ordinary Android reboot, not the `adb root` that is known to drop the USB link.
+So what is known is only what the firmware contains, and the payload key
+remains unknown. `{"enable":false}` alone changed nothing; `enable`, `value`,
+`mode`, `waterfallMode` and `open` sent together as `false` and `0`, followed
+by a reboot, left the panel upright -- but so would a `rotate` correction sent
+in the same batch. This handler does not validate its input, so it never names
+its field in an exception, and the setting cannot be read back: `screencap`
+shows normal orientation, Android's `mRotation` stays `0`, nothing is logged at
+boot, and the value lives in the app's own `/data`, which needs root to read.
 
-⚠ The payload key is **not known**. `{"enable":false}` alone did not clear it;
-what worked was sending `enable`/`value`/`mode`/`waterfallMode`/`open` as
-`false` and `0` together, then rebooting. Unlike `power`, this handler does not
-validate, so it never names its field in an exception, and the setting is
-invisible from the host: `screencap` shows normal orientation, Android's
-`mRotation` stays `0`, and nothing is logged at boot -- it is applied below the
-compositor and stored in the app's own `/data`, which needs root to read.
+KANALI 1.2.1 has no UI control for it, so no capture of the vendor sending it
+exists either. Settling this needs a build of the app that exposes the toggle.
 
-⚠⚠ **Do not sweep payload variants at this device.** Settings here can be
+`adb reboot` restarts the AIO alone -- no PC shutdown needed, and this hardware
+records `reboot,shell` in `persist.sys.boot.reason.history` from previous ones.
+It is an ordinary Android reboot, not the `adb root` that is known to drop the
+USB link.
+
+⚠⚠ **Do not sweep payload variants at this device.** Several settings here are
 stored and applied only at the next restart, so a sweep that appears to do
-nothing can leave a change armed -- that is exactly how waterfall mode ended up
-enabled, discovered only when the AIO was next unplugged. The rule the vendor's
-own UI states for Mirror Mode ("the cooler will restart upon confirming")
+nothing can leave a change armed, to surface whenever the cooler is next
+power-cycled -- and with no way to read any of them back, the armed value is
+invisible until it takes effect. The rule the vendor's own UI states for Mirror
+Mode ("the cooler will restart upon confirming")
 applies more widely than to Mirror Mode.
 
 **`power` is a host power-event notification, not a screen switch.** The field

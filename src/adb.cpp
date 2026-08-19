@@ -12,6 +12,12 @@
 namespace reed {
 
 namespace {
+// The cooler's own UI app -- the thing that acts on screen and fan commands.
+constexpr const char* kUiPackage = "com.baiyi.homeui.tkcfanhomeui";
+}  // namespace
+
+
+namespace {
 
 bool devices_output_has_device(const std::string& output) {
   std::istringstream iss(output);
@@ -173,6 +179,13 @@ std::optional<std::vector<std::string>> Adb::list_presets() {
     presets.push_back(line);
   }
   return presets;
+}
+
+bool Adb::ui_ready() {
+  auto out = run_command({"shell", "pidof", kUiPackage});
+  if (!out) return false;
+  // pidof prints nothing and exits non-zero when the process is absent.
+  return out->find_first_of("0123456789") != std::string::npos;
 }
 
 bool Adb::reboot() {

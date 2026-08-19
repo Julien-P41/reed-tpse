@@ -106,8 +106,9 @@ unimplemented.** It works; it is just deferred. Watching Android's `mRotation`
 for a live transform could never have seen it.
 
 ⚠ Because 270 is baseline, a "neutral-looking" `degree: 0` or `180` leaves the
-panel **90° out** — which looks exactly like waterfall mode. This is the most
-likely cause of the rotation incident earlier in this project.
+panel **90° out**. A panel found rotated after a power cycle is far more likely
+to be a stored `rotate` value than waterfall mode, which moves only the sysinfo
+overlay.
 
 ## `fanLCDSet` — tiers are (duty, curve) pairs
 

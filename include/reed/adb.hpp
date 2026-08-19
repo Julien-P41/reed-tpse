@@ -26,6 +26,12 @@ class Adb {
   // bundles adb.exe and does the same thing.
   static bool reboot();
 
+  // Is the cooler's UI app running? The serial port and adbd both come up
+  // well before it does, so a device that answers is not necessarily a device
+  // that will act on what it is told. Anything applied before this is true is
+  // silently lost.
+  static bool ui_ready();
+
  private:
   static std::optional<std::string> run_command(
       const std::vector<std::string>& args);
