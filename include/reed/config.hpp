@@ -25,9 +25,8 @@ struct Config {
 struct HudConfig {
   bool enabled = false;
   std::vector<std::string> metrics;  // firmware-defined labels, max 3
-  std::string position = "Top";      // Top | Center | Bottom
   std::string align = "Left";        // Left | Center | Right
-  std::string color = "#FFFFFF";
+  std::string color = "FFFFFF";  // bare hex, no `#`
   std::vector<std::string> badges;   // "CPU Badge", "GPU Badge"
   int push_interval_sec = 5;
   std::string temperature_unit = "Celsius";  // Celsius | Fahrenheit

@@ -44,33 +44,33 @@ static void print_usage(const char* prog) {
          "  raw <METHOD> <ENDPOINT> [JSON]\n"
          "                          Send an arbitrary command, print the "
          "response\n"
-         "  upload <file>           Upload media file (converts GIF to MP4)\n"
-         "  display <file...>       Set display to specified media files\n"
-         "                          (--play-mode single|shuffle|loop for a\n"
-         "                           multi-file playlist;\n"
-         "                           --filter Rain|Smoke|none --opacity 0-100;\n"
-         "                           --split <left> <right> for two zones)\n"
-         "  brightness <0-100>      Set display brightness\n"
+         "  fan <low|mid|high|full> Show LCD fan RPM, or set a named tier\n"
+         "                          (--smart follows temperature, --speed N pins\n"
+         "                           a duty, --reset restores the vendor default)\n"
          "  screen <on|off>         Turn the panel itself on or off\n"
-         "  rotate <normal|mirror>  Mirror Mode -- RESTARTS the cooler\n"
+         "  rotate <normal|mirror>  Mirror Mode ! RESTARTS the cooler\n"
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
-         "  lock-display <file>     Show <file> while the session is locked\n"
-         "                          (--default restores the standby clip)\n"
-         "  power <event>           Tell the device the host state: shutdown|\n"
-         "                          lock|unlock|ac|battery|suspend|resume\n"
-         "  fan [low|mid|high|full] Show LCD fan RPM, or set a named tier\n"
-         "                          (--smart follows temperature, --speed N pins\n"
-         "                           a duty, --reset restores the vendor default)\n"
+         "  upload <file>\n"
          "  list                    List media files on device\n"
          "  delete <file...>        Delete media files from device\n"
+         "  display <file...>       Set display to specified media files\n"
+         "                          (--play-mode single|shuffle|loop for a\n"
+         "                           multi-file playlist;\n"
+         "                           --split <left> <right> for two zones)\n"
+         "  filter <Rain|Smoke|none> --opacity 0-100\n"
+         "  brightness <0-100>      Set display brightness\n"
+         "  lock-display <file>     Show <file> while the session is locked\n"
+         "                          (--default restores the standby clip)\n"
+         "  hud config              Configure on-device telemetry overlay\n"
+         "  hud clear               Disable the telemetry overlay\n"
+         "  hud status\n"
+         "  power <event>           Tell the device the host state: shutdown|\n"
+         "                          lock|unlock|ac|battery|suspend|resume\n"
          "  daemon start            Start background daemon\n"
          "  daemon stop             Stop background daemon\n"
-         "  daemon status           Show daemon status\n"
-         "  hud configure           Configure on-device telemetry overlay\n"
-         "  hud clear               Disable the telemetry overlay\n"
-         "  hud status              Show current HUD configuration\n\n"
+         "  daemon status           Show daemon status\n\n"
          "Options:\n"
          "  -p, --port <path>       Serial port (auto-detected if not "
          "specified)\n"
@@ -99,9 +99,9 @@ static void print_usage(const char* prog) {
          "                          Memory Frequency, Memory Utilization,\n"
          "                          Hard Disk Temperature, CPU Power, GPU Power,\n"
          "                          Memory Temperature, Date&Time\n"
-         "  --position <pos>        Top | Center | Bottom (default: Top)\n"
          "  --align <align>         Left | Center | Right (default: Left)\n"
-         "  --color <hex>           e.g. #FFFFFF (default: #FFFFFF)\n"
+         "  --color <hex>           6 hex digits, no # -- e.g. 00FF00\n"
+         "                          (default: FFFFFF)\n"
          "  --badges <csv>          cpu,gpu (or none). Default: none\n"
          "  --interval <sec>        Push interval in seconds (default: 5)\n"
          "  --unit <unit>           Celsius | Fahrenheit (default: Celsius)\n"
@@ -505,6 +505,76 @@ static int cmd_rotate(const std::string& port, const std::string& arg,
   return 0;
 }
 
+// Overlay filter drawn across the media. Part of `settings`, so it rides on a
+// screen-config frame -- which means re-sending whatever media is current.
+static int cmd_filter(const std::string& port, const std::string& name,
+                      int opacity, bool opacity_given, bool verbose) {
+  std::string wire;
+  for (const char* known : {"Rain", "Smoke"}) {
+    std::string a, b;
+    for (char c : name) a += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char c : std::string(known)) b += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (a == b) wire = known;
+  }
+  if (wire.empty() && name != "none" && name != "None") {
+    std::cerr << "Unknown filter: \"" << name << "\"  (Rain | Smoke | none)\n";
+    return 1;
+  }
+  if (opacity_given && (opacity < 0 || opacity > 100)) {
+    std::cerr << "--opacity must be 0-100\n";
+    return 1;
+  }
+
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  if (state->media.empty() && !state->preset) {
+    std::cerr << "Nothing on screen to filter. Set media with `reed-tpse "
+                 "display <file>` first.\n";
+    return 1;
+  }
+
+  state->filter = wire;
+  if (opacity_given) state->filter_opacity = opacity;
+
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+  device.drain();
+  device.handshake();
+
+  reed::ScreenConfig cfg;
+  cfg.media = state->media;
+  cfg.ratio = state->ratio;
+  cfg.screen_mode = state->screen_mode;
+  cfg.play_mode = state->play_mode;
+  cfg.settings.align = state->hud.align;
+  cfg.settings.color = state->hud.color;
+  cfg.settings.badges = state->hud.badges;
+  cfg.settings.filter = state->filter;
+  cfg.settings.filter_opacity = state->filter_opacity;
+  if (state->hud.enabled) cfg.sysinfo_display = state->hud.metrics;
+  if (cfg.screen_mode == "Screen Splitting") {
+    cfg.split = true;
+    cfg.split_settings_right = cfg.settings;
+  }
+
+  if (!device.set_screen_config(cfg)) {
+    std::cerr << "No response to 'POST waterBlockScreenId'\n";
+    return 1;
+  }
+  reed::ConfigManager::save_state(*state);
+
+  if (wire.empty()) {
+    std::cout << "Filter cleared.\n";
+  } else {
+    std::cout << "Filter: " << wire << " at " << state->filter_opacity
+              << "% opacity\n";
+  }
+  return 0;
+}
+
 static int cmd_screen(const std::string& port, const std::string& arg,
                       bool verbose) {
   bool enable;
@@ -601,6 +671,18 @@ static const PowerEvent kPowerEvents[] = {
     {"battery", "on-battery"},  {"suspend", "suspend"},
     {"resume", "resume"},
 };
+
+// Colours are handled as bare hex -- `00FF00`, no `#`.
+//
+// `--color #00FF00` is a trap: unquoted, every common shell treats `#` as the
+// start of a comment and drops it and everything after, so the flag arrives
+// empty and the value is silently lost. Dropping the `#` from the CLI, the
+// config file and every printed value removes the trap rather than warning
+// about it. A `#` is still accepted on input, and added back when the value
+// goes on the wire -- the device wants `#RRGGBB`.
+static std::string normalise_hex_colour(const std::string& in) {
+  return (!in.empty() && in[0] == '#') ? in.substr(1) : in;
+}
 
 static const char* lookup_power_event(const std::string& in) {
   for (const auto& e : kPowerEvents) {
@@ -882,7 +964,6 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
   reed::DisplaySettings settings;
   std::vector<std::string> sysinfo;
   if (prev) {
-    settings.position = prev->hud.position;
     settings.align = prev->hud.align;
     settings.color = prev->hud.color;
     settings.badges = prev->hud.badges;
@@ -1234,9 +1315,8 @@ static int cmd_display(const std::string& port,
                        const std::vector<std::string>& files,
                        const std::string& ratio, int brightness,
                        bool brightness_given, const std::string& play_mode,
-                       const std::string& filter, bool filter_given,
-                       int filter_opacity, bool opacity_given, bool split,
-                       bool keepalive, int keepalive_interval, bool verbose) {
+                       bool split, bool keepalive, int keepalive_interval,
+                       bool verbose) {
   if (brightness < 0 || brightness > 100) {
     std::cerr << "Brightness must be 0-100\n";
     return 1;
@@ -1307,12 +1387,10 @@ static int cmd_display(const std::string& port,
   // multi-file `display` only ever showed the first file.
   config.play_mode = play_mode.empty() ? state->play_mode : play_mode;
 
-  // Same rule as brightness: an unspecified filter keeps whatever is stored
-  // rather than silently clearing it.
-  config.settings.filter = filter_given ? filter : state->filter;
-  config.settings.filter_opacity =
-      opacity_given ? filter_opacity : state->filter_opacity;
-  config.settings.position = state->hud.position;
+  // The filter is `reed-tpse filter`'s business; carry the stored value
+  // through so changing media does not silently clear it.
+  config.settings.filter = state->filter;
+  config.settings.filter_opacity = state->filter_opacity;
   config.settings.align = state->hud.align;
   config.settings.color = state->hud.color;
   config.settings.badges = state->hud.badges;
@@ -1550,7 +1628,6 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     screen_config.play_mode = state->play_mode;
     if (state->hud.enabled) {
       screen_config.sysinfo_display = state->hud.metrics;
-      screen_config.settings.position = state->hud.position;
       screen_config.settings.align = state->hud.align;
       screen_config.settings.color = state->hud.color;
       screen_config.settings.badges = state->hud.badges;
@@ -1877,7 +1954,6 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
     if (h.metrics.empty()) std::cout << " (none)";
     for (const auto& m : h.metrics) std::cout << " [" << m << "]";
     std::cout << "\n";
-    std::cout << "  Position: " << h.position << "\n";
     std::cout << "  Align: " << h.align << "\n";
     std::cout << "  Color: " << h.color << "\n";
     std::cout << "  Badges:";
@@ -1921,7 +1997,7 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
     return 0;
   }
 
-  if (action != "configure") {
+  if (action != "config" && action != "configure") {
     std::cerr << "Unknown hud action: " << action << "\n";
     return 1;
   }
@@ -1936,6 +2012,14 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
     auto next = [&](const char* flag) -> std::string {
       if (++i >= args.size()) {
         std::cerr << "Missing value for " << flag << "\n";
+        if (flag == std::string("--color")) {
+          // Overwhelmingly the cause: `--color #00FF00` unquoted, where the
+          // shell treats # as a comment and drops the rest of the line.
+          std::cerr << "  If you wrote `--color #RRGGBB`, the # started a "
+                       "shell comment and\n"
+                       "  the value never arrived. Drop the # or quote it: "
+                       "--color 00FF00\n";
+        }
         std::exit(1);
       }
       return args[i];
@@ -1944,12 +2028,10 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
       h.metrics = split_csv(next("--metrics"));
       for (auto& m : h.metrics) m = canonical_hud_label(m);
       metrics_provided = true;
-    } else if (a == "--position") {
-      h.position = next("--position");
     } else if (a == "--align") {
       h.align = next("--align");
     } else if (a == "--color") {
-      h.color = next("--color");
+      h.color = normalise_hex_colour(next("--color"));
     } else if (a == "--badges") {
       h.badges.clear();
       for (const auto& tok : split_csv(next("--badges"))) {
@@ -2024,8 +2106,11 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
       if (v == o) return true;
     return false;
   };
-  if (!one_of(h.position, {"Top", "Center", "Bottom"})) {
-    std::cerr << "Invalid --position: " << h.position << "\n";
+  if (h.color.size() != 6 ||
+      h.color.find_first_not_of("0123456789abcdefABCDEF") !=
+          std::string::npos) {
+    std::cerr << "Invalid --color: " << h.color
+              << "  (want 6 hex digits, e.g. 00FF00)\n";
     return 1;
   }
   if (!one_of(h.align, {"Left", "Center", "Right"})) {
@@ -2059,7 +2144,6 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
       // media alone -- the vendor's own overlay path. Re-sending a whole
       // screen config here used to reload the video on every HUD tweak.
       reed::DisplaySettings settings;
-      settings.position = h.position;
       settings.align = h.align;
       settings.color = h.color;
       settings.badges = h.badges;
@@ -2124,8 +2208,6 @@ int main(int argc, char* argv[]) {
   bool fan_smart = false;
   bool split = false;
   std::string play_mode;  // empty = keep whatever is saved
-  std::string filter;
-  bool filter_given = false;
   int filter_opacity = 100;
   bool opacity_given = false;
   int brightness = config.brightness;
@@ -2157,14 +2239,6 @@ int main(int argc, char* argv[]) {
       split = true;
     } else if (arg == "--smart") {
       fan_smart = true;
-    } else if (arg == "--filter") {
-      if (i + 1 >= argc) {
-        std::cerr << "--filter needs a name, or \"none\"\n";
-        return 1;
-      }
-      filter = argv[++i];
-      if (filter == "none" || filter == "None") filter.clear();
-      filter_given = true;
     } else if (arg == "--opacity") {
       if (i + 1 >= argc) {
         std::cerr << "--opacity needs a value 0-100\n";
@@ -2326,8 +2400,7 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_display(port, args, ratio, brightness, brightness_given,
-                       play_mode, filter, filter_given, filter_opacity,
-                       opacity_given, split, keepalive, keepalive_interval,
+                       play_mode, split, keepalive, keepalive_interval,
                        verbose);
   } else if (command == "brightness") {
     if (args.empty()) {
@@ -2349,6 +2422,13 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_rotate(port, args[0], force, verbose);
+  } else if (command == "filter") {
+    if (args.empty()) {
+      std::cerr << "Usage: reed-tpse filter <Rain|Smoke|none> "
+                   "[--opacity 0-100]\n";
+      return 1;
+    }
+    return cmd_filter(port, args[0], filter_opacity, opacity_given, verbose);
   } else if (command == "screen") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse screen <on|off>\n";

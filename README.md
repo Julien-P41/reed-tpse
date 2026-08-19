@@ -199,24 +199,25 @@ reed-tpse info                   # Show device info
 reed-tpse status                 # Fan/pump RPM, warnings, free storage
 reed-tpse raw <METHOD> <ENDPOINT> [JSON]
                                  # Send any command, print the response
-reed-tpse upload <file>          # Upload media file
-reed-tpse display <file...>      # Set display content (playlist if >1 file)
+reed-tpse fan <low|mid|high|full> # LCD fan RPM, or set a tier
 reed-tpse screen <on|off>        # Panel power
 reed-tpse rotate <normal|mirror> # Mirror Mode (reboots the cooler)
-reed-tpse brightness <0-100>     # Adjust brightness
-reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
+reed-tpse sleep-display <on|off> # Black screen vs demo loop when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
-reed-tpse power <event>          # shutdown|lock|unlock|ac|battery|suspend|resume
-reed-tpse lock-display <file>    # custom screen while the session is locked
-reed-tpse fan [low|mid|high|full] # LCD fan RPM, or set a tier (--speed N for 0-100)
+reed-tpse upload <file>          # Upload media file
 reed-tpse list                   # List files on device
 reed-tpse delete <file>          # Delete file from device
+reed-tpse display <file...>      # Set display content (playlist if >1 file)
+reed-tpse filter <Rain|Smoke|none> --opacity 0-100
+reed-tpse brightness <0-100>     # Adjust brightness
+reed-tpse lock-display <file>    # custom screen while the session is locked
+reed-tpse hud config             # Configure on-device telemetry overlay
+reed-tpse hud clear              # Disable the telemetry overlay
+reed-tpse hud status             # Show current HUD configuration
+reed-tpse power <event>          # shutdown|lock|unlock|ac|battery|suspend|resume
 reed-tpse daemon start           # Start background keepalive
 reed-tpse daemon stop            # Stop daemon
 reed-tpse daemon status          # Check daemon status
-reed-tpse hud configure ...      # Configure on-device telemetry overlay
-reed-tpse hud clear              # Disable the telemetry overlay
-reed-tpse hud status             # Show current HUD configuration
 ```
 
 Add `--system` to any `daemon` subcommand to address the system-scope unit
@@ -245,6 +246,21 @@ reed-tpse display just-this.mp4 --play-mode single
 
 ⚠ Before this existed, `display` always sent `playMode: "Single"` regardless of
 how many files were listed -- so a multi-file `display` showed only the first.
+
+### Filters
+
+An overlay the firmware draws across the media, independent of the HUD:
+
+```bash
+reed-tpse filter Rain --opacity 60
+reed-tpse filter Smoke
+reed-tpse filter none
+```
+
+`Rain` and `Smoke` are the only names seen on the wire; `none` clears it.
+Opacity is 0-100 and persists, so `filter Smoke` on its own keeps whatever
+opacity was set last. The filter travels in `settings` on a screen-config
+frame, so this re-sends the current media -- expect the clip to restart.
 
 ### Status
 
@@ -572,9 +588,9 @@ and (2) periodic value pushes; the cooler draws everything itself.
 
 ```bash
 # Pick up to 3 metrics, place them top-left, show CPU/GPU badges
-reed-tpse hud configure \
+reed-tpse hud config \
     --metrics "CPU Temperature,GPU Temperature,GPU Usage" \
-    --position Top --align Left --color "#FFFFFF" \
+    --align Left --color FFFFFF \
     --badges cpu,gpu --interval 5
 
 reed-tpse hud status    # show current config
@@ -594,17 +610,24 @@ Hard Disk Temperature, Date & Time
 
 #### Layout options
 
-- `--position Top|Center|Bottom` × `--align Left|Center|Right` → 9 anchor points
-- `--color "#RRGGBB"` text color
+- `--align Left|Center|Right`
+- `--color RRGGBB` text colour — **six hex digits, no `#`**. An unquoted
+  `#RRGGBB` is a shell comment: the value is silently dropped before the
+  program ever sees it. A `#` is still accepted if you quote it, and is added
+  back when the value goes on the wire.
 - `--badges cpu,gpu` draws CPU/GPU marketing-name chips alongside the values
   (auto-detected from `/proc/cpuinfo` and `nvidia-smi`; override with
   `--cpu-name` / `--gpu-name`)
 - `--unit Celsius|Fahrenheit`
 - `--interval <sec>` — how often the daemon pushes fresh values (default 5s)
 
-**Firmware limits:** 3 metrics max per screen; placement is the 9-anchor grid,
-not arbitrary pixel coordinates. If you need free placement or more than 3
-metrics, you'd have to composite frames host-side (not supported here).
+**Firmware limits:** 3 metrics max per screen, and vertical placement is not
+adjustable. Metrics render mid-height and badges near the top; only the
+horizontal `align` has any effect. There was a `--position Top|Center|Bottom`
+flag here, removed after testing: all three values were sent with badges and
+metrics enabled and nothing moved on firmware V1.0.11, and KANALI never sends
+the field at all. If you need free placement or more than 3 metrics, you'd have
+to composite frames host-side (not supported here).
 
 #### Telemetry sources
 
@@ -648,7 +671,7 @@ CPU metric in the set.
 
 The firmware accepts 16 labels, but a Linux host cannot source all of them, and
 the overlay only has three slots -- a metric with no source silently renders a
-permanent `0`, which reads as a device fault. `hud configure` samples the
+permanent `0`, which reads as a device fault. `hud config` samples the
 machine first and warns instead:
 
 ```

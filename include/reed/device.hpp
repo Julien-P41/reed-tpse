@@ -19,10 +19,7 @@ struct DeviceInfo {
 };
 
 struct DisplaySettings {
-  // `position` is ours, not the vendor's: KANALI only ever sends `align`.
-  // Kept because the firmware may honour it, but treat it as unverified.
-  std::string position = "Top";     // "Top", "Center", "Bottom"
-  std::string color = "#FFFFFF";    // hex
+  std::string color = "FFFFFF";     // bare hex; `#` added on the wire
   std::string align = "Center";     // "Left", "Center", "Right"
   std::vector<std::string> badges;  // "CPU Badge", "GPU Badge"
   // Overlay filter drawn across the media. KANALI sends null for "none";

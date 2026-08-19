@@ -228,9 +228,10 @@ std::optional<DisplayState> ConfigManager::load_state() {
     HudConfig& h = state.hud;
     h.enabled = get_bool(hud_val, "enabled", h.enabled);
     h.metrics = get_string_array(hud_val, "metrics");
-    h.position = get_string(hud_val, "position", h.position);
     h.align = get_string(hud_val, "align", h.align);
     h.color = get_string(hud_val, "color", h.color);
+    // Colours were once stored as `#RRGGBB`; carry those files forward.
+    if (!h.color.empty() && h.color[0] == '#') h.color = h.color.substr(1);
     h.badges = get_string_array(hud_val, "badges");
     h.push_interval_sec =
         get_int(hud_val, "push_interval_sec", h.push_interval_sec);
@@ -295,7 +296,6 @@ bool ConfigManager::save_state(const DisplayState& state) {
   picojson::object hud_obj;
   hud_obj["enabled"] = picojson::value(state.hud.enabled);
   hud_obj["metrics"] = picojson::value(hud_metrics_arr);
-  hud_obj["position"] = picojson::value(state.hud.position);
   hud_obj["align"] = picojson::value(state.hud.align);
   hud_obj["color"] = picojson::value(state.hud.color);
   hud_obj["badges"] = picojson::value(hud_badges_arr);

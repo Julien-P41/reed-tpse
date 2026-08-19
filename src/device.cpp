@@ -458,8 +458,9 @@ picojson::object settings_object(const DisplaySettings& in) {
   }
 
   picojson::object out;
-  out["position"] = picojson::value(in.position);
-  out["color"] = picojson::value(in.color);
+  // The device wants `#RRGGBB`; everything host-side stores bare hex.
+  out["color"] = picojson::value(
+      in.color.empty() || in.color[0] == '#' ? in.color : "#" + in.color);
   out["align"] = picojson::value(in.align);
   out["badges"] = picojson::value(badges_arr);
   out["filter"] = picojson::value(filter);

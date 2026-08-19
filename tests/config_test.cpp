@@ -44,9 +44,8 @@ static DisplayState populated() {
   s.fan_duty = 57;
   s.hud.enabled = true;
   s.hud.metrics = {"CPU Temperature", "Date&Time"};
-  s.hud.position = "Bottom";
   s.hud.align = "Right";
-  s.hud.color = "#00FF00";
+  s.hud.color = "00FF00";  // bare hex; `#` is added on the wire only
   s.hud.badges = {"CPU Badge"};
   s.hud.push_interval_sec = 9;
   s.hud.temperature_unit = "Fahrenheit";
@@ -80,7 +79,6 @@ int main() {
   check("fan_duty", out->fan_duty == in.fan_duty);
   check("hud.enabled", out->hud.enabled == in.hud.enabled);
   check("hud.metrics", out->hud.metrics == in.hud.metrics);
-  check("hud.position", out->hud.position == in.hud.position);
   check("hud.align", out->hud.align == in.hud.align);
   check("hud.color", out->hud.color == in.hud.color);
   check("hud.badges", out->hud.badges == in.hud.badges);
