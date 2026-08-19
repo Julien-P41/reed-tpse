@@ -35,6 +35,27 @@ struct DisplaySettings {
 // KANALI always sends exactly 8 points, first at 0 degC and last at 100/100.
 using FanCurve = std::vector<std::pair<int, int>>;
 
+// Everything `POST config` carries. The vendor sends this immediately after
+// `conn`, on every connect -- one frame instead of the five-plus we used to
+// send, which is what the post-connect race was about.
+struct FullConfig {
+  std::string temperature_unit = "Celsius";
+  bool screen_enable = true;
+  bool display_in_sleep = false;
+  int brightness = 75;
+  // Panel rotation. Deliberately optional and unset by default: the value is
+  // applied at the NEXT device restart and there is no way to read the
+  // current one back, so sending a guess would silently arm a 90-degree
+  // rotation. Only set this when the user asked for it.
+  std::optional<int> rotate;
+  std::string fan_mode = "Smart Mode";
+  std::vector<std::pair<int, int>> fan_curve;
+  int fan_fixed = 40;
+  std::string cpu_name;
+  std::string gpu_name;
+  // Pump control is left out entirely -- the motherboard owns it here.
+};
+
 struct ScreenConfig {
   std::vector<std::string> media;
   std::string screen_mode = "Full Screen";
@@ -119,6 +140,12 @@ class Device {
   // on/off toggle, and the one thing it sends after `config` on every
   // connect.
   std::optional<Response> set_screen_power(bool enable);
+
+  // One-shot apply of the whole device state, the vendor's own post-connect
+  // frame. `screen` supplies the media/overlay half. Note the device sends no
+  // response to this command -- nor to `conn` -- so a null return is normal.
+  std::optional<Response> send_config(const FullConfig& config,
+                                      const ScreenConfig& screen);
   // keep_listed=false deletes the named files (`include`); keep_listed=true
   // deletes everything NOT named (`exclude`) -- the vendor's post-upload
   // sweep. Unused by the CLI, which deletes over adb instead.

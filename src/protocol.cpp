@@ -1,6 +1,7 @@
 #include "reed/protocol.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <sstream>
 
@@ -65,10 +66,18 @@ std::vector<uint8_t> build_frame(const std::string& request_state,
   // First line: REQUEST_STATE CMD_TYPE VERSION
   body << request_state << " " << cmd_type << " " << version << "\r\n";
 
-  // Headers
+  // Headers. The host numbers its own frames with SeqNumber and stamps Date;
+  // AckNumber is the device's field, echoed back in its reply. We used to send
+  // AckNumber here, i.e. format requests like responses -- the device parsed
+  // them anyway but logged `SeqNumber=-1` for every one.
   body << "ContentType=json\r\n";
   body << "ContentLength=" << content.size() << "\r\n";
-  body << "AckNumber=" << ack_number << "\r\n";
+  body << "SeqNumber=" << ack_number << "\r\n";
+  body << "Date="
+       << std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count()
+       << "\r\n";
 
   // Double CRLF separator + content
   body << "\r\n" << content;

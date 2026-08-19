@@ -1452,23 +1452,13 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       screen_config.settings.align = state->hud.align;
       screen_config.settings.color = state->hud.color;
       screen_config.settings.badges = state->hud.badges;
+    }
+    // The filter is part of the media, not the overlay -- it applies whether
+    // or not the HUD is on.
     screen_config.settings.filter = state->filter;
     screen_config.settings.filter_opacity = state->filter_opacity;
-      screen_config.settings.filter = state->filter;
-      screen_config.settings.filter_opacity = state->filter_opacity;
-    }
   };
-  screen_config.media = state->media;
-  screen_config.ratio = state->ratio;
-  screen_config.screen_mode = state->screen_mode;
-  screen_config.play_mode = state->play_mode;
-  if (state->hud.enabled) {
-    screen_config.sysinfo_display = state->hud.metrics;
-    screen_config.settings.position = state->hud.position;
-    screen_config.settings.align = state->hud.align;
-    screen_config.settings.color = state->hud.color;
-    screen_config.settings.badges = state->hud.badges;
-  }
+  rebuild_screen_config();
 
   auto device = std::make_unique<reed::Device>(actual_port, verbose);
   if (!device->connect()) {
@@ -1478,15 +1468,38 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
 
   auto restore = [&](reed::Device& dev) {
     if (!dev.handshake()) return false;
-    if (state->hud.enabled) {
-      dev.send_spec(state->hud.cpu_name, state->hud.gpu_name);
-      dev.set_temperature_unit(state->hud.temperature_unit);
+
+    // One `config` frame carries temperature unit, panel power, sleep mode,
+    // brightness, the whole screen block and the fan -- the vendor's own
+    // post-connect apply. Doing it in one write closes the window where the
+    // device was running half our settings and half the firmware defaults,
+    // which is what the 20s re-apply below was working around.
+    //
+    // Everything here is volatile on the device: it lives in controller RAM
+    // and is lost whenever USB power drops, which it does at S5. Hence the
+    // re-apply on every connect rather than once at install time.
+    reed::FullConfig full;
+    full.temperature_unit = state->hud.temperature_unit;
+    if (state->screen_on) full.screen_enable = *state->screen_on;
+    if (state->display_in_sleep) full.display_in_sleep = *state->display_in_sleep;
+    full.brightness = state->brightness;
+    full.cpu_name = state->hud.cpu_name;
+    full.gpu_name = state->hud.gpu_name;
+    if (state->fan_tier) {
+      const FanTier* t = lookup_fan_tier(*state->fan_tier);
+      if (t) full.fan_curve = t->curve;
+      full.fan_mode = state->fan_duty ? "Fixed Mode" : "Smart Mode";
+      full.fan_fixed = state->fan_duty ? *state->fan_duty : (t ? t->duty : 40);
     }
-    // Volatile on the device -- controller RAM, lost whenever USB power drops
-    // (which it does at S5) -- so re-apply it on every connect, not just once.
-    if (state->display_in_sleep) {
-      dev.set_display_in_sleep(*state->display_in_sleep);
-    }
+    // `rotate` is left unset on purpose -- see FullConfig::rotate.
+    dev.send_config(full, screen_config);
+
+    // Brightness goes out again explicitly. Whether `config` honours its own
+    // brightness field could not be settled: the device logs
+    // `--onDoBrightness--100` for every value (an explicit {"value":40}
+    // logs 100 too, so the line does not echo the request), and the backlight
+    // sysfs needs root to read. One extra frame is cheaper than the doubt.
+    dev.set_brightness(state->brightness);
     if (power_auto) {
       // Tell the device where the host stands as soon as we are talking to it.
       if (auto batt = on_battery()) {
@@ -1500,22 +1513,12 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
         }
       }
     }
-    if (state->fan_tier) {
-      if (state->fan_duty) {
-        const FanTier* t = lookup_fan_tier(*state->fan_tier);
-        dev.set_fan_fixed(*state->fan_duty, t ? t->curve : reed::FanCurve{});
-      } else {
-        const FanTier* t = lookup_fan_tier(*state->fan_tier);
-        dev.set_fan_smart(t ? t->curve : reed::FanCurve{}, t ? t->duty : 40);
-      }
-    }
+    // A preset is the one thing `config` cannot express: its `id` block is
+    // built for custom media, so the preset id has to go out separately.
     if (state->preset) {
       dev.set_preset("Pre-set 1: " + *state->preset, screen_config.settings,
                      screen_config.sysinfo_display);
-    } else if (!screen_config.media.empty()) {
-      dev.set_screen_config(screen_config);
     }
-    dev.set_brightness(state->brightness);
 
     // Reconnecting during a locked session must land on the lock screen, not
     // on the normal media. The loop only sees *transitions*, so without this a

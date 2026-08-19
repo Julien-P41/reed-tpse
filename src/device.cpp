@@ -466,37 +466,41 @@ picojson::object settings_object(const DisplaySettings& in) {
   return out;
 }
 
-}  // namespace
-
-std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
+// The screen half: `id` + media + overlay. Sent bare as waterBlockScreenId,
+// or nested under waterBlockScreen.id inside a `config` frame.
+picojson::object screen_object(const ScreenConfig& config) {
   picojson::array media_arr;
   for (const auto& m : config.media) {
     media_arr.push_back(picojson::value(m));
   }
-
-  picojson::object settings = settings_object(config.settings);
-
   picojson::array sysinfo_arr;
   for (const auto& label : config.sysinfo_display) {
     sysinfo_arr.push_back(picojson::value(label));
   }
 
-  picojson::object cfg;
+  picojson::object out;
   // No "Type" key: that was ours. KANALI sends `id` alone to pick between
   // custom media ("Customization") and a preset ("Pre-set N: Name").
-  cfg["id"] = picojson::value("Customization");
-  cfg["screenMode"] = picojson::value(config.screen_mode);
-  cfg["ratio"] = picojson::value(config.ratio);
-  cfg["playMode"] = picojson::value(config.play_mode);
-  cfg["media"] = picojson::value(media_arr);
-  cfg["settings"] = picojson::value(settings);
-  cfg["sysinfoDisplay"] = picojson::value(sysinfo_arr);
+  out["id"] = picojson::value("Customization");
+  out["screenMode"] = picojson::value(config.screen_mode);
+  out["ratio"] = picojson::value(config.ratio);
+  out["playMode"] = picojson::value(config.play_mode);
+  out["media"] = picojson::value(media_arr);
+  out["settings"] = picojson::value(settings_object(config.settings));
+  out["sysinfoDisplay"] = picojson::value(sysinfo_arr);
+  return out;
+}
 
-  std::string content = picojson::value(cfg).serialize();
+}  // namespace
 
-  // Firmware requires two POSTs with a small gap to reliably apply.
-  send_command("POST", "waterBlockScreenId", content);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
+
+  std::string content = picojson::value(screen_object(config)).serialize();
+
+  // One POST, like the vendor. This used to be sent twice with a 500ms gap on
+  // the belief that the first was unreliable; ten fresh-connect single sends
+  // in a row all applied, so the retry was masking something else -- most
+  // likely the handshake timing, which `config` now covers.
   return send_command("POST", "waterBlockScreenId", content);
 }
 
@@ -505,6 +509,47 @@ std::optional<Response> Device::set_brightness(int value) {
   obj["value"] = picojson::value(static_cast<double>(value));
   std::string content = picojson::value(obj).serialize();
   return send_command("POST", "brightness", content);
+}
+
+std::optional<Response> Device::send_config(const FullConfig& config,
+                                           const ScreenConfig& screen) {
+  picojson::object id = screen_object(screen);
+
+  picojson::object fan;
+  fan["mode"] = picojson::value(config.fan_mode);
+  picojson::array points;
+  for (const auto& [temp, duty] : config.fan_curve) {
+    picojson::array point;
+    point.push_back(picojson::value(static_cast<double>(temp)));
+    point.push_back(picojson::value(static_cast<double>(duty)));
+    points.push_back(picojson::value(point));
+  }
+  fan["smartMode"] = picojson::value(points);
+  fan["fixedMode"] = picojson::value(static_cast<double>(config.fan_fixed));
+
+  picojson::object screen_block;
+  screen_block["enable"] = picojson::value(config.screen_enable);
+  screen_block["displayInSleep"] = picojson::value(config.display_in_sleep);
+  screen_block["brightness"] =
+      picojson::value(static_cast<double>(config.brightness));
+  // Omitted unless explicitly set -- see the note on FullConfig::rotate.
+  if (config.rotate) {
+    screen_block["rotate"] =
+        picojson::value(static_cast<double>(*config.rotate));
+  }
+  screen_block["id"] = picojson::value(id);
+  screen_block["fanLCD"] = picojson::value(fan);
+
+  picojson::object spec;
+  spec["cpu"] = picojson::value(config.cpu_name);
+  spec["gpu"] = picojson::value(config.gpu_name);
+
+  picojson::object obj;
+  obj["temperature"] = picojson::value(config.temperature_unit);
+  obj["waterBlockScreen"] = picojson::value(screen_block);
+  obj["spec"] = picojson::value(spec);
+
+  return send_command("POST", "config", picojson::value(obj).serialize());
 }
 
 std::optional<Response> Device::set_screen_power(bool enable) {
@@ -625,7 +670,10 @@ std::optional<Response> Device::send_sysinfo(
           .count()));
 
   std::string content = picojson::value(pc_info).serialize();
-  return send_command("POST", "all", content, false);
+  // STATE, not POST: the vendor pushes its telemetry as a `STATE all` request
+  // body and gets the device's status back on the same exchange, which is why
+  // it never needs a separate read. Both verbs are accepted here.
+  return send_command("STATE", "all", content, false);
 }
 
 std::optional<Response> Device::set_sysinfo_display(
@@ -689,9 +737,6 @@ std::optional<Response> Device::set_preset(
   obj["sysinfoDisplay"] = picojson::value(sysinfo_arr);
 
   std::string content = picojson::value(obj).serialize();
-  // Same double-send as set_screen_config: the first POST is unreliable.
-  send_command("POST", "waterBlockScreenId", content);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
   return send_command("POST", "waterBlockScreenId", content);
 }
 
