@@ -67,6 +67,18 @@ struct DisplayState {
   std::optional<int> fan_duty;          // percent; unset means Smart Mode
 };
 
+// Why a load failed. "Not there yet" and "there but unreadable" were both
+// reported as an empty optional, and every caller treated that as first-run:
+// load, fall back to a default-constructed state, set one field, save. A
+// partial read of a file being rewritten therefore persisted defaults over
+// everything else in it.
+enum class LoadStatus {
+  Ok,
+  Missing,    // nothing saved yet -- defaults are correct
+  Unreadable, // exists but could not be opened
+  Malformed,  // exists and did not parse -- do NOT overwrite
+};
+
 class ConfigManager {
  public:
   static std::string get_config_dir();
@@ -74,10 +86,10 @@ class ConfigManager {
   static std::string get_config_path();
   static std::string get_state_path();
 
-  static std::optional<Config> load_config();
+  static std::optional<Config> load_config(LoadStatus* status = nullptr);
   static bool save_config(const Config& config);
 
-  static std::optional<DisplayState> load_state();
+  static std::optional<DisplayState> load_state(LoadStatus* status = nullptr);
   static bool save_state(const DisplayState& state);
 };
 

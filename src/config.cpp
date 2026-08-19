@@ -63,6 +63,36 @@ const picojson::value& get_value(const picojson::value& v,
 
 }  // namespace
 
+namespace {
+
+// Write via a temporary in the same directory, then rename. rename(2) is
+// atomic within a filesystem, so a reader either sees the whole previous file
+// or the whole new one -- never the truncated middle, which a plain ofstream
+// leaves visible for as long as the write takes.
+bool write_atomically(const std::string& path, const std::string& content) {
+  const std::string tmp = path + ".tmp";
+  {
+    std::ofstream file(tmp, std::ios::trunc);
+    if (!file) return false;
+    file << content;
+    file.flush();
+    if (!file.good()) {
+      std::error_code ec;
+      fs::remove(tmp, ec);
+      return false;
+    }
+  }
+  std::error_code ec;
+  fs::rename(tmp, path, ec);
+  if (ec) {
+    fs::remove(tmp, ec);
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 std::string ConfigManager::get_config_dir() {
   const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
   if (xdg_config && *xdg_config) {
@@ -99,15 +129,20 @@ std::string ConfigManager::get_state_path() {
   return get_state_dir() + "/display.json";
 }
 
-std::optional<Config> ConfigManager::load_config() {
+std::optional<Config> ConfigManager::load_config(LoadStatus* status) {
+  auto report = [status](LoadStatus s) {
+    if (status) *status = s;
+  };
   std::string path = get_config_path();
 
   if (!fs::exists(path)) {
+    report(LoadStatus::Missing);
     return Config{};
   }
 
   std::ifstream file(path);
   if (!file) {
+    report(LoadStatus::Unreadable);
     return std::nullopt;
   }
 
@@ -117,8 +152,10 @@ std::optional<Config> ConfigManager::load_config() {
   picojson::value json;
   std::string err = picojson::parse(json, ss.str());
   if (!err.empty()) {
+    report(LoadStatus::Malformed);
     return std::nullopt;
   }
+  report(LoadStatus::Ok);
 
   Config config;
   config.port = get_string(json, "port", config.port);
@@ -139,12 +176,6 @@ bool ConfigManager::save_config(const Config& config) {
   std::string dir = get_config_dir();
   fs::create_directories(dir);
 
-  std::string path = get_config_path();
-  std::ofstream file(path);
-  if (!file) {
-    return false;
-  }
-
   picojson::object obj;
   obj["port"] = picojson::value(config.port);
   obj["brightness"] = picojson::value(static_cast<double>(config.brightness));
@@ -157,19 +188,24 @@ bool ConfigManager::save_config(const Config& config) {
         picojson::value(static_cast<double>(config.lock_brightness));
   }
 
-  file << picojson::value(obj).serialize() << "\n";
-  return file.good();
+  return write_atomically(get_config_path(),
+                          picojson::value(obj).serialize() + "\n");
 }
 
-std::optional<DisplayState> ConfigManager::load_state() {
+std::optional<DisplayState> ConfigManager::load_state(LoadStatus* status) {
+  auto report = [status](LoadStatus s) {
+    if (status) *status = s;
+  };
   std::string path = get_state_path();
 
   if (!fs::exists(path)) {
+    report(LoadStatus::Missing);
     return std::nullopt;
   }
 
   std::ifstream file(path);
   if (!file) {
+    report(LoadStatus::Unreadable);
     return std::nullopt;
   }
 
@@ -179,8 +215,10 @@ std::optional<DisplayState> ConfigManager::load_state() {
   picojson::value json;
   std::string err = picojson::parse(json, ss.str());
   if (!err.empty()) {
+    report(LoadStatus::Malformed);
     return std::nullopt;
   }
+  report(LoadStatus::Ok);
 
   DisplayState state;
 
@@ -256,12 +294,6 @@ bool ConfigManager::save_state(const DisplayState& state) {
   std::string dir = get_state_dir();
   fs::create_directories(dir);
 
-  std::string path = get_state_path();
-  std::ofstream file(path);
-  if (!file) {
-    return false;
-  }
-
   picojson::array media_arr;
   for (const auto& m : state.media) {
     media_arr.push_back(picojson::value(m));
@@ -318,8 +350,8 @@ bool ConfigManager::save_state(const DisplayState& state) {
     obj["hud_right"] = picojson::value(write_hud(*state.hud_right));
   }
 
-  file << picojson::value(obj).serialize() << "\n";
-  return file.good();
+  return write_atomically(get_state_path(),
+                          picojson::value(obj).serialize() + "\n");
 }
 
 }  // namespace reed

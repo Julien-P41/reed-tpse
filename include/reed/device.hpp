@@ -25,7 +25,10 @@ struct DisplaySettings {
   // Overlay filter drawn across the media. KANALI sends null for "none";
   // "Rain" and "Smoke" are the two names seen on the wire.
   std::string filter;               // empty = none
-  int filter_opacity = 0;           // 0-100
+  // Matches DisplayState::filter_opacity. These defaulted differently (0 here,
+  // 100 there), so any ScreenConfig built without copying from state produced
+  // a fully transparent filter.
+  int filter_opacity = 100;         // 0-100
 };
 
 // LCD-fan curve: [temperature in degC, duty in percent], ascending in both.

@@ -263,9 +263,45 @@ std::string metric_hint(const std::string& label) {
 // Transient commands have nothing to save and still need the port for
 // themselves: `power` and `rotate` are events, `raw` is arbitrary, `status`
 // and `info` are reads.
+// Load the state a command is about to modify and save back.
+//
+// A missing file is first run: defaults are the right answer. A file that
+// exists but does not parse is NOT -- every caller here reads, changes one
+// field and writes the whole thing back, so treating a bad read as first run
+// persists defaults over the media, HUD, fan and filter settings that were in
+// there. Refuse instead and say why.
+static std::optional<reed::DisplayState> load_state_for_update() {
+  reed::LoadStatus status = reed::LoadStatus::Ok;
+  auto state = reed::ConfigManager::load_state(&status);
+  if (state) return state;
+  if (status == reed::LoadStatus::Missing) return reed::DisplayState{};
+
+  std::cerr << "Refusing to continue: " << reed::ConfigManager::get_state_path()
+            << (status == reed::LoadStatus::Malformed
+                    ? " exists but does not parse.\n"
+                    : " exists but could not be read.\n")
+            << "  Saving now would overwrite it with defaults. Fix or delete "
+               "the file first.\n";
+  return std::nullopt;
+}
+
 static bool daemon_holds_port(const std::string& port) {
   auto holder = reed::find_port_holder(port.empty() ? "/dev/ttyACM0" : port);
-  return holder && holder->comm.find("reed-tpse") != std::string::npos;
+  if (!holder || holder->comm.find("reed-tpse") == std::string::npos) {
+    return false;
+  }
+
+  // Matching the process name alone is not enough: `display --keepalive` left
+  // running in another terminal is also a reed-tpse holding the port, and it
+  // will never apply a saved state. Telling the user "the daemon will do it"
+  // in that case is a lie that looks like success. Check the argv.
+  std::ifstream cmdline("/proc/" + std::to_string(holder->pid) + "/cmdline",
+                        std::ios::binary);
+  if (!cmdline) return false;
+  std::string argv((std::istreambuf_iterator<char>(cmdline)),
+                   std::istreambuf_iterator<char>());
+  std::replace(argv.begin(), argv.end(), '\0', ' ');
+  return argv.find(" daemon ") != std::string::npos;
 }
 
 static int defer_to_daemon(const std::string& what) {
@@ -547,8 +583,8 @@ static int cmd_filter(const std::string& port, const std::string& name,
     return 1;
   }
 
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
+  auto state = load_state_for_update();
+  if (!state) return 1;
   if (state->media.empty() && !state->preset) {
     std::cerr << "Nothing on screen to filter. Set media with `reed-tpse "
                  "display <file>` first.\n";
@@ -621,8 +657,8 @@ static int cmd_screen(const std::string& port, const std::string& arg,
     return 1;
   }
 
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
+  auto state = load_state_for_update();
+  if (!state) return 1;
   state->screen_on = enable;
   reed::ConfigManager::save_state(*state);
 
@@ -661,8 +697,8 @@ static int cmd_sleep_display(const std::string& port, const std::string& arg,
   // The device answers 200 with an empty body either way, so the reply proves
   // nothing. Persist it instead and let the daemon re-apply, since the setting
   // lives in controller RAM and is lost whenever USB power drops.
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
+  auto state = load_state_for_update();
+  if (!state) return 1;
   state->display_in_sleep = enable;
   reed::ConfigManager::save_state(*state);
 
@@ -992,8 +1028,8 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
   {
     // Saved before the device is touched, so a busy port hands over to the
     // daemon instead of failing.
-    auto st = reed::ConfigManager::load_state();
-    if (!st) st = reed::DisplayState{};
+    auto st = load_state_for_update();
+    if (!st) return 1;
     st->preset = match;
     st->media.clear();  // a preset and custom media are mutually exclusive
     reed::ConfigManager::save_state(*st);
@@ -1159,8 +1195,8 @@ static int cmd_fan(const std::string& port, bool reset,
                 << "Use: low | mid | high | full   (or --speed <0-100>)\n";
       return 1;
     }
-    auto st = reed::ConfigManager::load_state();
-    if (!st) st = reed::DisplayState{};
+    auto st = load_state_for_update();
+    if (!st) return 1;
     st->fan_tier = t->wire;
     if (smart) {
       st->fan_duty.reset();
@@ -1272,8 +1308,8 @@ static int cmd_fan(const std::string& port, bool reset,
     device.send_sysinfo(build_sysinfo({"CPU Temperature", "GPU Temperature"},
                                       metrics));
 
-    auto state = reed::ConfigManager::load_state();
-    if (!state) state = reed::DisplayState{};
+    auto state = load_state_for_update();
+    if (!state) return 1;
     state->fan_tier = wire_tier;
     // An unset duty is the daemon's marker for Smart Mode, so it re-applies
     // the same mode it was given rather than pinning the curve's fixed value.
@@ -1445,8 +1481,8 @@ static int cmd_display(const std::string& port,
 
   // Loaded before touching the device: the effective brightness falls back to
   // whatever is already stored when --brightness was not given.
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
+  auto state = load_state_for_update();
+  if (!state) return 1;
 
   reed::ScreenConfig config;
   config.media = media_files;
@@ -1562,8 +1598,8 @@ static int cmd_brightness(const std::string& port, int value, bool verbose) {
   // Persist it: the device forgets on power loss and the daemon re-applies
   // state->brightness on connect, so without this the value silently reverts
   // at the next reboot.
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
+  auto state = load_state_for_update();
+  if (!state) return 1;
   state->brightness = value;
   reed::ConfigManager::save_state(*state);
 
@@ -1671,7 +1707,16 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   // Foreground daemon mode
   auto config = reed::ConfigManager::load_config();
 
-  auto state = reed::ConfigManager::load_state();
+  reed::LoadStatus state_status = reed::LoadStatus::Ok;
+  auto state = reed::ConfigManager::load_state(&state_status);
+  if (!state && state_status != reed::LoadStatus::Missing) {
+    // Starting from defaults here would push them to the device and, on the
+    // next state write, persist them over whatever the file actually held.
+    std::cerr << "Refusing to start: " << reed::ConfigManager::get_state_path()
+              << " could not be read.\n"
+              << "  Fix or delete it, then start again.\n";
+    return 1;
+  }
   if (!state) {
     state = bootstrap_display_state(config ? config->brightness : 75);
   }
@@ -2114,11 +2159,12 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
     return 0;
   }
 
-  // Load existing state so we preserve media/brightness/ratio.
-  reed::DisplayState state;
-  if (auto loaded = reed::ConfigManager::load_state()) {
-    state = *loaded;
-  }
+  // Load existing state so we preserve media/brightness/ratio. Guarded: this
+  // function writes the whole state back, so a bad read must not silently
+  // become a reset.
+  auto loaded = load_state_for_update();
+  if (!loaded) return 1;
+  reed::DisplayState state = *loaded;
 
   if (action == "clear") {
     state.hud = reed::HudConfig{};  // reset
