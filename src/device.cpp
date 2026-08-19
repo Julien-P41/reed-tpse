@@ -483,11 +483,31 @@ picojson::object screen_object(const ScreenConfig& config) {
   // custom media ("Customization") and a preset ("Pre-set N: Name").
   out["id"] = picojson::value("Customization");
   out["screenMode"] = picojson::value(config.screen_mode);
-  out["ratio"] = picojson::value(config.ratio);
   out["playMode"] = picojson::value(config.play_mode);
   out["media"] = picojson::value(media_arr);
-  out["settings"] = picojson::value(settings_object(config.settings));
-  out["sysinfoDisplay"] = picojson::value(sysinfo_arr);
+
+  if (config.split) {
+    // Two zones as parallel arrays, and no `ratio` -- the split layout fixes
+    // its own geometry.
+    picojson::array settings_arr;
+    settings_arr.push_back(picojson::value(settings_object(config.settings)));
+    settings_arr.push_back(
+        picojson::value(settings_object(config.split_settings_right)));
+    out["settings"] = picojson::value(settings_arr);
+
+    picojson::array right_arr;
+    for (const auto& label : config.split_sysinfo_right) {
+      right_arr.push_back(picojson::value(label));
+    }
+    picojson::array zones;
+    zones.push_back(picojson::value(sysinfo_arr));
+    zones.push_back(picojson::value(right_arr));
+    out["sysinfoDisplay"] = picojson::value(zones);
+  } else {
+    out["ratio"] = picojson::value(config.ratio);
+    out["settings"] = picojson::value(settings_object(config.settings));
+    out["sysinfoDisplay"] = picojson::value(sysinfo_arr);
+  }
   return out;
 }
 

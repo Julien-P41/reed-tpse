@@ -1,0 +1,34 @@
+#!/bin/sh
+# Tell the cooler when the host suspends and resumes.
+#
+# Install as root:
+#   install -m755 systemd/reed-tpse-sleep /usr/lib/systemd/system-sleep/reed-tpse
+#
+# systemd runs everything in system-sleep/ with ("pre"|"post", <sleep type>)
+# and BLOCKS the transition until it returns -- so this must be quick and must
+# never hang. `power` is one frame and exits.
+#
+# The daemon holds the serial port with TIOCEXCL, so it has to let go first.
+# Stopping it on the way down is also what makes the panel stay dark: the
+# device treats any reconnect as a wake, and a running daemon reconnects
+# immediately after the event.
+set -e
+
+BIN=/usr/local/bin/reed-tpse
+UNIT=reed-tpse.service
+
+[ -x "$BIN" ] || exit 0
+
+case "$1" in
+  pre)
+    systemctl stop "$UNIT" 2>/dev/null || true
+    "$BIN" power suspend || true
+    ;;
+  post)
+    # The daemon re-applies everything on connect, including the media the
+    # standby clip replaced, so `resume` mainly matters when the daemon is
+    # not enabled.
+    "$BIN" power resume || true
+    systemctl start "$UNIT" 2>/dev/null || true
+    ;;
+esac

@@ -48,7 +48,8 @@ static void print_usage(const char* prog) {
          "  display <file...>       Set display to specified media files\n"
          "                          (--play-mode single|shuffle|loop for a\n"
          "                           multi-file playlist;\n"
-         "                           --filter Rain|Smoke|none --opacity 0-100)\n"
+         "                           --filter Rain|Smoke|none --opacity 0-100;\n"
+         "                           --split <left> <right> for two zones)\n"
          "  brightness <0-100>      Set display brightness\n"
          "  screen <on|off>         Turn the panel itself on or off\n"
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
@@ -56,8 +57,8 @@ static void print_usage(const char* prog) {
          "  preset <name|list>      Show a firmware-bundled preset\n"
          "  lock-display <file>     Show <file> while the session is locked\n"
          "                          (--default restores the standby clip)\n"
-         "  power <event>           Tell the device the host state:\n"
-         "                          shutdown|lock|unlock|ac|battery\n"
+         "  power <event>           Tell the device the host state: shutdown|\n"
+         "                          lock|unlock|ac|battery|suspend|resume\n"
          "  fan [low|mid|high|full] Show LCD fan RPM, or set a named tier\n"
          "                          (--smart follows temperature, --speed N pins\n"
          "                           a duty, --reset restores the vendor default)\n"
@@ -515,7 +516,8 @@ struct PowerEvent {
 static const PowerEvent kPowerEvents[] = {
     {"shutdown", "shutdown"},   {"lock", "lock-screen"},
     {"unlock", "unlock-screen"}, {"ac", "ac-power"},
-    {"battery", "on-battery"},
+    {"battery", "on-battery"},  {"suspend", "suspend"},
+    {"resume", "resume"},
 };
 
 static const char* lookup_power_event(const std::string& in) {
@@ -703,7 +705,8 @@ static int cmd_power(const std::string& port, const std::string& arg,
   const char* wire = lookup_power_event(arg);
   if (!wire) {
     std::cerr << "Unknown power event: \"" << arg << "\"\n"
-              << "Use: shutdown | lock | unlock | ac | battery\n";
+              << "Use: shutdown | lock | unlock | ac | battery | suspend |\n"
+              << "     resume\n";
     return 1;
   }
 
@@ -720,7 +723,8 @@ static int cmd_power(const std::string& port, const std::string& arg,
   }
 
   std::cout << "Sent power event: " << wire << "\n";
-  if (std::string(wire) == "shutdown" || std::string(wire) == "lock-screen") {
+  if (std::string(wire) == "shutdown" || std::string(wire) == "lock-screen" ||
+      std::string(wire) == "suspend") {
     std::cout << "  ⚠ The panel wakes again as soon as something reopens the\n"
                  "    serial port -- the device treats a reconnect as a wake.\n"
                  "    Stop the daemon first if the panel should stay dark.\n";
@@ -1149,10 +1153,16 @@ static int cmd_display(const std::string& port,
                        const std::string& ratio, int brightness,
                        bool brightness_given, const std::string& play_mode,
                        const std::string& filter, bool filter_given,
-                       int filter_opacity, bool opacity_given, bool keepalive,
-                       int keepalive_interval, bool verbose) {
+                       int filter_opacity, bool opacity_given, bool split,
+                       bool keepalive, int keepalive_interval, bool verbose) {
   if (brightness < 0 || brightness > 100) {
     std::cerr << "Brightness must be 0-100\n";
+    return 1;
+  }
+
+  if (split && files.size() != 2) {
+    std::cerr << "--split needs exactly two files: left then right (got "
+              << files.size() << ")\n";
     return 1;
   }
 
@@ -1214,6 +1224,7 @@ static int cmd_display(const std::string& port,
   // Without this the struct default ("Single") went out on every call, so a
   // multi-file `display` only ever showed the first file.
   config.play_mode = play_mode.empty() ? state->play_mode : play_mode;
+
   // Same rule as brightness: an unspecified filter keeps whatever is stored
   // rather than silently clearing it.
   config.settings.filter = filter_given ? filter : state->filter;
@@ -1223,6 +1234,14 @@ static int cmd_display(const std::string& port,
   config.settings.align = state->hud.align;
   config.settings.color = state->hud.color;
   config.settings.badges = state->hud.badges;
+  if (split) {
+    config.screen_mode = "Screen Splitting";
+    config.split = true;
+    // Both zones get the same styling. The vendor's UI edits them separately;
+    // there is no reason to expose two sets of flags before anyone asks. This
+    // has to come after `settings` is filled, or the right zone ships blank.
+    config.split_settings_right = config.settings;
+  }
 
   device.set_screen_config(config);
   const int effective_brightness =
@@ -1249,6 +1268,7 @@ static int cmd_display(const std::string& port,
   state->media = media_files;
   state->ratio = ratio;
   state->play_mode = config.play_mode;
+  state->screen_mode = config.screen_mode;
   state->filter = config.settings.filter;
   state->filter_opacity = config.settings.filter_opacity;
   state->preset.reset();  // custom media and a preset are mutually exclusive
@@ -1457,6 +1477,12 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     // or not the HUD is on.
     screen_config.settings.filter = state->filter;
     screen_config.settings.filter_opacity = state->filter_opacity;
+    // A saved split layout has to be rebuilt as one, or the daemon would
+    // re-apply it as a single full-screen config on the next connect.
+    if (screen_config.screen_mode == "Screen Splitting") {
+      screen_config.split = true;
+      screen_config.split_settings_right = screen_config.settings;
+    }
   };
   rebuild_screen_config();
 
@@ -1992,6 +2018,7 @@ int main(int argc, char* argv[]) {
   bool verbose = false;
   std::string ratio = "2:1";
   bool fan_smart = false;
+  bool split = false;
   std::string play_mode;  // empty = keep whatever is saved
   std::string filter;
   bool filter_given = false;
@@ -2022,6 +2049,8 @@ int main(int argc, char* argv[]) {
       }
     } else if (arg == "-v" || arg == "--verbose") {
       verbose = true;
+    } else if (arg == "--split") {
+      split = true;
     } else if (arg == "--smart") {
       fan_smart = true;
     } else if (arg == "--filter") {
@@ -2194,7 +2223,8 @@ int main(int argc, char* argv[]) {
     }
     return cmd_display(port, args, ratio, brightness, brightness_given,
                        play_mode, filter, filter_given, filter_opacity,
-                       opacity_given, keepalive, keepalive_interval, verbose);
+                       opacity_given, split, keepalive, keepalive_interval,
+                       verbose);
   } else if (command == "brightness") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse brightness <0-100>\n";

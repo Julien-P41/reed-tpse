@@ -63,6 +63,14 @@ struct ScreenConfig {
   std::string play_mode = "Single";
   std::vector<std::string> sysinfo_display;  // max 3 firmware-defined labels
   DisplaySettings settings;
+
+  // Screen Splitting only. When screen_mode is "Screen Splitting" the vendor
+  // sends `settings` as a two-element array and `sysinfoDisplay` as an array
+  // of two arrays -- left zone, then right -- and drops `ratio` entirely.
+  // `media` stays flat, one entry per zone.
+  bool split = false;
+  DisplaySettings split_settings_right;
+  std::vector<std::string> split_sysinfo_right;
 };
 
 struct SysinfoData {
