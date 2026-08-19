@@ -218,17 +218,34 @@ Filters seen: `"Rain"`, `"Smoke"`, `null`, with `opacity` 0-100.
 `exclude` carries the app's whole media library and is sent after every upload
 and before every screen-config change. `type` is required.
 
-## Media upload over the wire
+## Media upload — the vendor uses adb too
 
 ```
 POST transport   {"type":"media","fileSize":3329147,"fileName":"....png"}
-   ... data ...
+   ... file bytes, NOT on this endpoint ...
 POST transported {"md5":"todo","fileName":"....png"}
 <<< {"state":"success","blockMaxSize":888888888}
 ```
 
-KANALI does not compute the MD5 — it sends the literal string `todo`. We upload
-over adb instead, so this path is unused here.
+The two JSON frames are 0.5 s apart, which is nowhere near long enough to move
+3.3 MB at 115200 baud — and the serial endpoint carries only ~60 KB across the
+whole capture. The file goes out on a **second bulk endpoint on the same USB
+device**, and its first packets are:
+
+```
+OPEN....  sync:  WRTE....  STA2+.../sdcard/pcMedia/2026-08-...  OKAY....
+```
+
+That is the **adb wire protocol**, pushing to `/sdcard/pcMedia/` — the same
+path and the same mechanism `reed-tpse upload` already uses. KANALI bundles
+`adb.exe` for exactly this.
+
+So there is no serial file transfer to implement, and the adb dependency is not
+something the vendor avoids. `transport`/`transported` are announce/confirm
+envelopes around an adb push; we skip them deliberately, because sending them
+would make `upload` need the serial port, which the daemon holds with
+TIOCEXCL. (KANALI does not compute the MD5 either — it sends the literal
+string `todo`.)
 
 ## Everything else, verbatim
 

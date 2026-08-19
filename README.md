@@ -44,7 +44,8 @@ firmware V1.0.11); where something is only inferred, the text says so.
 - Upload images, videos, and GIFs (auto-converts to MP4)
 - Set display content and brightness
 - Read device status: fan/pump RPM, health warnings, free storage
-- LCD fan speed control (named tiers or any duty 0-100%)
+- LCD fan speed control (named tiers, any duty 0-100%, or Smart Mode curves)
+- Panel power, Mirror Mode, Screen Splitting, media filters, playlists
 - Black screen instead of the demo loop when the host is off (`sleep-display`)
 - Firmware presets, played from the device's own storage (`preset`)
 - Host power events -- lock / unlock / shutdown -- manually or mirrored
@@ -198,10 +199,12 @@ reed-tpse raw <METHOD> <ENDPOINT> [JSON]
                                  # Send any command, print the response
 reed-tpse upload <file>          # Upload media file
 reed-tpse display <file...>      # Set display content (playlist if >1 file)
+reed-tpse screen <on|off>        # Panel power
+reed-tpse rotate <normal|mirror> # Mirror Mode (reboots the cooler)
 reed-tpse brightness <0-100>     # Adjust brightness
 reed-tpse sleep-display <on|off> # Black screen vs sleep animation when host is off
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
-reed-tpse power <event>          # shutdown|lock|unlock|ac|battery
+reed-tpse power <event>          # shutdown|lock|unlock|ac|battery|suspend|resume
 reed-tpse lock-display <file>    # custom screen while the session is locked
 reed-tpse fan [low|mid|high|full] # LCD fan RPM, or set a tier (--speed N for 0-100)
 reed-tpse list                   # List files on device
