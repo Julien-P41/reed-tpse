@@ -254,6 +254,26 @@ std::string metric_hint(const std::string& label) {
 
 }  // namespace
 
+// The daemon holds the port exclusively (TIOCEXCL) and re-applies whenever the
+// state file changes, so a command whose effect is stored in that file can
+// simply save and let the daemon push it. Failing instead -- which is what
+// every one of these used to do -- refuses a change the daemon is about to
+// make anyway.
+//
+// Transient commands have nothing to save and still need the port for
+// themselves: `power` and `rotate` are events, `raw` is arbitrary, `status`
+// and `info` are reads.
+static bool daemon_holds_port(const std::string& port) {
+  auto holder = reed::find_port_holder(port.empty() ? "/dev/ttyACM0" : port);
+  return holder && holder->comm.find("reed-tpse") != std::string::npos;
+}
+
+static int defer_to_daemon(const std::string& what) {
+  std::cout << what << " saved. The daemon holds the port and applies it "
+                       "within a second.\n";
+  return 0;
+}
+
 static int cmd_info(const std::string& port, bool verbose) {
   reed::Device device(port, verbose);
 
@@ -538,6 +558,11 @@ static int cmd_filter(const std::string& port, const std::string& name,
   state->filter = wire;
   if (opacity_given) state->filter_opacity = opacity;
 
+  reed::ConfigManager::save_state(*state);
+  if (daemon_holds_port(port)) {
+    return defer_to_daemon("Filter");
+  }
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -574,7 +599,6 @@ static int cmd_filter(const std::string& port, const std::string& name,
     std::cerr << "No response to 'POST waterBlockScreenId'\n";
     return 1;
   }
-  reed::ConfigManager::save_state(*state);
 
   if (wire.empty()) {
     std::cout << "Filter cleared.\n";
@@ -597,6 +621,15 @@ static int cmd_screen(const std::string& port, const std::string& arg,
     return 1;
   }
 
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->screen_on = enable;
+  reed::ConfigManager::save_state(*state);
+
+  if (daemon_holds_port(port)) {
+    return defer_to_daemon("Panel power");
+  }
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -608,11 +641,6 @@ static int cmd_screen(const std::string& port, const std::string& arg,
     std::cerr << "No response to 'POST waterBlockScreen'\n";
     return 1;
   }
-
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
-  state->screen_on = enable;
-  reed::ConfigManager::save_state(*state);
 
   std::cout << "Panel " << (enable ? "on" : "off") << "\n";
   return 0;
@@ -630,6 +658,18 @@ static int cmd_sleep_display(const std::string& port, const std::string& arg,
     return 1;
   }
 
+  // The device answers 200 with an empty body either way, so the reply proves
+  // nothing. Persist it instead and let the daemon re-apply, since the setting
+  // lives in controller RAM and is lost whenever USB power drops.
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->display_in_sleep = enable;
+  reed::ConfigManager::save_state(*state);
+
+  if (daemon_holds_port(port)) {
+    return defer_to_daemon("Sleep-display");
+  }
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -642,12 +682,6 @@ static int cmd_sleep_display(const std::string& port, const std::string& arg,
     return 1;
   }
 
-  // The device answers 200 with an empty body either way, so the reply proves
-  // nothing. Persist it instead and let the daemon re-apply, since the setting
-  // lives in controller RAM and is lost whenever USB power drops.
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
-  state->display_in_sleep = enable;
   if (!reed::ConfigManager::save_state(*state)) {
     std::cerr << "Warning: could not persist sleep-display state\n";
   }
@@ -955,6 +989,17 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
     return 1;
   }
 
+  {
+    // Saved before the device is touched, so a busy port hands over to the
+    // daemon instead of failing.
+    auto st = reed::ConfigManager::load_state();
+    if (!st) st = reed::DisplayState{};
+    st->preset = match;
+    st->media.clear();  // a preset and custom media are mutually exclusive
+    reed::ConfigManager::save_state(*st);
+  }
+  if (daemon_holds_port(port)) return defer_to_daemon("Preset " + match);
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -986,11 +1031,6 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
     std::cerr << "No response to 'POST waterBlockScreenId'\n";
     return 1;
   }
-
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
-  state->preset = match;
-  reed::ConfigManager::save_state(*state);
 
   std::cout << "Preset set to: " << match << "\n";
   return 0;
@@ -1105,6 +1145,32 @@ static const char* nearest_tier_name(int duty) {
 static int cmd_fan(const std::string& port, bool reset,
                    const std::string& tier_arg, int duty_arg, bool smart,
                    const std::string& profile_path, bool force, bool verbose) {
+  // Checked before the port is opened: connect() prints its own "already open"
+  // diagnostic, which is noise when handing over to the daemon is the expected
+  // path. `fan` with no arguments is a read, and --profile/--reset need the
+  // port; only a tier or duty is state-backed.
+  if (daemon_holds_port(port) && profile_path.empty() && !reset &&
+      (!tier_arg.empty() || duty_arg >= 0)) {
+    const FanTier* t = tier_arg.empty()
+                           ? lookup_fan_tier(nearest_tier_name(duty_arg))
+                           : lookup_fan_tier(tier_arg);
+    if (!t) {
+      std::cerr << "Unknown fan tier: \"" << tier_arg << "\"\n"
+                << "Use: low | mid | high | full   (or --speed <0-100>)\n";
+      return 1;
+    }
+    auto st = reed::ConfigManager::load_state();
+    if (!st) st = reed::DisplayState{};
+    st->fan_tier = t->wire;
+    if (smart) {
+      st->fan_duty.reset();
+    } else {
+      st->fan_duty = tier_arg.empty() ? duty_arg : t->duty;
+    }
+    reed::ConfigManager::save_state(*st);
+    return defer_to_daemon("Fan setting");
+  }
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -1493,6 +1559,16 @@ static int cmd_brightness(const std::string& port, int value, bool verbose) {
     return 1;
   }
 
+  // Persist it: the device forgets on power loss and the daemon re-applies
+  // state->brightness on connect, so without this the value silently reverts
+  // at the next reboot.
+  auto state = reed::ConfigManager::load_state();
+  if (!state) state = reed::DisplayState{};
+  state->brightness = value;
+  reed::ConfigManager::save_state(*state);
+
+  if (daemon_holds_port(port)) return defer_to_daemon("Brightness");
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -1501,14 +1577,6 @@ static int cmd_brightness(const std::string& port, int value, bool verbose) {
 
   device.handshake();
   device.set_brightness(value);
-
-  // Persist it: the device forgets on power loss and the daemon re-applies
-  // state->brightness on connect, so without this the value silently reverts
-  // at the next reboot.
-  auto state = reed::ConfigManager::load_state();
-  if (!state) state = reed::DisplayState{};
-  state->brightness = value;
-  reed::ConfigManager::save_state(*state);
 
   std::cout << "Brightness set to " << value << "\n";
   return 0;
@@ -1754,8 +1822,20 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       // Lock state is applied after the media below, so that a locked session
       // does not get the normal media painted over its lock screen.
       if (auto locked = session_locked()) {
-        if (!(config && config->lock_media)) {
-          dev.send_power_event(*locked ? "lock-screen" : "unlock-screen");
+        if (*locked) {
+          // With lock_media configured the media itself is the lock screen,
+          // so the event would only duplicate it.
+          if (!(config && config->lock_media)) {
+            dev.send_power_event("lock-screen");
+          }
+        } else {
+          // Always sent, even with lock_media configured. This daemon sends
+          // `shutdown` when it exits, and standby is sticky: nothing but
+          // unlock-screen/resume hides it again. Skipping this left the panel
+          // on the standby loop across a daemon restart, with the media
+          // applied underneath and every re-apply looking like it did
+          // nothing.
+          dev.send_power_event("unlock-screen");
         }
       }
     }
@@ -1872,11 +1952,14 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   long long cfg_seen = mtime_of(cfg_path);
   long long state_seen = mtime_of(state_path);
 
-  // Fallback for the readiness wait above: with no adb there is nothing to
-  // poll, so one blind re-apply still heals a restore that landed too early.
-  // Skipped entirely when adb is available, since the wait already covers it.
-  auto reapply_at = clock::now() + std::chrono::seconds(20);
-  bool reapplied = reed::Adb::is_device_connected();
+  // One late re-apply, always. The readiness wait above covers the case it was
+  // written for, but not every way a startup apply can fail to stick -- a
+  // daemon start has been observed leaving the panel on the standby loop with
+  // correct state on disk and no further `config` frame until something
+  // touched the state file. Making this conditional on adb removed the only
+  // net under that, and it costs one frame per daemon start.
+  auto reapply_at = clock::now() + std::chrono::seconds(25);
+  bool reapplied = false;
 
   int failures = 0;
   while (g_running) {

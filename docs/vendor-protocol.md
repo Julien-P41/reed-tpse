@@ -268,6 +268,19 @@ POST displayInSleep    {"enable":true|false}
 POST power             {"event":"lock-screen"|"unlock-screen"|...}
 ```
 
+⚠ **Standby is sticky.** `shutdown`, `lock-screen` and `suspend` all put the
+panel on the standby loop, and nothing clears it except `unlock-screen` or
+`resume` -- not a new screen config, not new media, not a whole `config` frame.
+The device accepts `setLayout1Path` for a clip and keeps showing standby over
+it, so the logs look exactly like a successful media change.
+
+This bites across a daemon restart: a daemon that sends `shutdown` on exit
+leaves the device in that state, and its replacement must send an unlock event
+on connect or the panel never comes back.
+
+```
+```
+
 ## Command frequency across all 20 captures
 
 | n | command | | n | command |

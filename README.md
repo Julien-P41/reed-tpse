@@ -985,7 +985,13 @@ device log):
 | `unlock-screen` | -- | hides standby, restores the media |
 
 So `shutdown` and `lock-screen` are not the same despite both logging
-`--showStandby--`: only `shutdown` blanks completely. That makes
+`--showStandby--`: only `shutdown` blanks completely.
+
+⚠ **Standby is sticky.** Once `shutdown`, `lock-screen` or `suspend` has put
+the panel there, only `unlock-screen` or `resume` takes it off. Re-sending
+media does not: the device accepts the new path, logs `setLayout1Path`, and
+carries on showing standby over it -- so the media looks applied in every log
+while the panel says otherwise. That makes
 `power {"event":"shutdown"}` plus `sleep-display on` the deterministic way to
 darken the panel at host shutdown, rather than waiting out the ~60s keepalive
 timeout.
