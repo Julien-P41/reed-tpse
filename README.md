@@ -605,8 +605,13 @@ Metric labels are defined by the firmware. Unknown labels are rejected:
 CPU Temperature, CPU Frequency, CPU Usage, CPU Voltage,
 GPU Temperature, GPU Frequency, GPU Usage, GPU Voltage,
 Motherboard Temperature, Memory Frequency, Memory Utilization,
-Hard Disk Temperature, Date & Time
+Hard Disk Temperature, Date&Time
 ```
+
+⚠ `Date&Time` is **unspaced** on the wire. The spaced `Date & Time` is the
+vendor app's UI string, and the firmware silently drops it while accepting
+every other label in the same request -- so the clock just never appears.
+`reed-tpse` accepts either spelling and normalises it.
 
 #### Layout options
 
