@@ -41,6 +41,11 @@ struct DisplayState {
   std::string play_mode = "Single";
   int brightness = 75;  // default lower than max setting to reduce burn-in risk on the display
   HudConfig hud;
+  // Screen Splitting draws two independent overlays -- the wire carries
+  // `settings` as a two-element array and `sysinfoDisplay` as two arrays.
+  // Unset means the right zone mirrors the left, which is what a split
+  // configured before this existed did.
+  std::optional<HudConfig> hud_right;
   // Sleep-mode behaviour. Unset means "never configured, leave the device
   // alone"; the setting is volatile on the device (it is lost whenever USB
   // power is cut), so once set it has to be re-applied by the daemon.

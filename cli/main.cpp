@@ -64,6 +64,8 @@ static void print_usage(const char* prog) {
          "  lock-display <file>     Show <file> while the session is locked\n"
          "                          (--default restores the standby clip)\n"
          "  hud config              Configure on-device telemetry overlay\n"
+         "                          (--zone right targets the right half when\n"
+         "                           the screen is split)\n"
          "  hud clear               Disable the telemetry overlay\n"
          "  hud status\n"
          "  power <event>           Tell the device the host state: shutdown|\n"
@@ -558,6 +560,14 @@ static int cmd_filter(const std::string& port, const std::string& name,
   if (cfg.screen_mode == "Screen Splitting") {
     cfg.split = true;
     cfg.split_settings_right = cfg.settings;
+    if (state->hud_right) {
+      cfg.split_settings_right.align = state->hud_right->align;
+      cfg.split_settings_right.color = state->hud_right->color;
+      cfg.split_settings_right.badges = state->hud_right->badges;
+      if (state->hud_right->enabled) {
+        cfg.split_sysinfo_right = state->hud_right->metrics;
+      }
+    }
   }
 
   if (!device.set_screen_config(cfg)) {
@@ -1372,14 +1382,6 @@ static int cmd_display(const std::string& port,
   auto state = reed::ConfigManager::load_state();
   if (!state) state = reed::DisplayState{};
 
-  reed::Device device(port, verbose);
-  if (!device.connect()) {
-    std::cerr << "Failed to connect to " << port << "\n";
-    return 1;
-  }
-
-  device.handshake();
-
   reed::ScreenConfig config;
   config.media = media_files;
   config.ratio = ratio;
@@ -1397,15 +1399,49 @@ static int cmd_display(const std::string& port,
   if (split) {
     config.screen_mode = "Screen Splitting";
     config.split = true;
-    // Both zones get the same styling. The vendor's UI edits them separately;
-    // there is no reason to expose two sets of flags before anyone asks. This
-    // has to come after `settings` is filled, or the right zone ships blank.
+    // Has to come after `settings` is filled, or the right zone ships blank.
     config.split_settings_right = config.settings;
+    // The right zone follows its own HUD when one has been configured with
+    // `hud config --zone right`; otherwise it mirrors the left.
+    if (state->hud_right) {
+      const reed::HudConfig& r = *state->hud_right;
+      config.split_settings_right.align = r.align;
+      config.split_settings_right.color = r.color;
+      config.split_settings_right.badges = r.badges;
+      if (r.enabled) config.split_sysinfo_right = r.metrics;
+    }
   }
 
-  device.set_screen_config(config);
   const int effective_brightness =
       brightness_given ? brightness : state->brightness;
+
+  // Save first, then treat a busy port as "the daemon will do it". The daemon
+  // holds the port exclusively and now re-applies on any state change, so
+  // failing here refuses a change it is about to make anyway -- which is what
+  // `display` did whenever the daemon was running.
+  if (brightness_given) state->brightness = brightness;
+  state->media = media_files;
+  state->ratio = ratio;
+  state->play_mode = config.play_mode;
+  state->screen_mode = config.screen_mode;
+  state->preset.reset();  // custom media and a preset are mutually exclusive
+  reed::ConfigManager::save_state(*state);
+
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    if (auto holder = reed::find_port_holder(port.empty() ? "/dev/ttyACM0"
+                                                          : port);
+        holder && holder->comm.find("reed-tpse") != std::string::npos) {
+      std::cout << "Saved. The daemon holds the port and applies it within a "
+                   "second.\n";
+      return 0;
+    }
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+
+  device.handshake();
+  device.set_screen_config(config);
   device.set_brightness(effective_brightness);
 
   std::cout << "Display set to: ";
@@ -1424,16 +1460,6 @@ static int cmd_display(const std::string& port,
   // Brightness is its own setting. Changing what is on screen should not
   // silently reset it to the config default -- that quietly undid any
   // `reed-tpse brightness N` the moment the media changed.
-  if (brightness_given) state->brightness = brightness;
-  state->media = media_files;
-  state->ratio = ratio;
-  state->play_mode = config.play_mode;
-  state->screen_mode = config.screen_mode;
-  state->filter = config.settings.filter;
-  state->filter_opacity = config.settings.filter_opacity;
-  state->preset.reset();  // custom media and a preset are mutually exclusive
-  reed::ConfigManager::save_state(*state);
-
   if (!keepalive) {
     std::cout << "Run 'reed-tpse daemon start' to keep display persistent.\n";
     return 0;
@@ -1641,6 +1667,13 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     if (screen_config.screen_mode == "Screen Splitting") {
       screen_config.split = true;
       screen_config.split_settings_right = screen_config.settings;
+      if (state->hud_right) {
+        const reed::HudConfig& r = *state->hud_right;
+        screen_config.split_settings_right.align = r.align;
+        screen_config.split_settings_right.color = r.color;
+        screen_config.split_settings_right.badges = r.badges;
+        if (r.enabled) screen_config.split_sysinfo_right = r.metrics;
+      }
     }
   };
   rebuild_screen_config();
@@ -1803,8 +1836,8 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
   // Telemetry is needed for the HUD *and* for a fixed fan duty -- the device
   // only honours the fan profile while host data keeps arriving, and reverts
   // to 100% when it stops. Schedule pushes if either wants them.
-  bool push_telemetry =
-      state->hud.enabled || state->fan_duty.has_value();
+  bool push_telemetry = state->hud.enabled || state->fan_duty.has_value() ||
+                        (state->hud_right && state->hud_right->enabled);
   auto next_sysinfo =
       push_telemetry
           ? now + std::chrono::seconds(state->hud.push_interval_sec)
@@ -1850,8 +1883,14 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
         rebuild_screen_config();
       }
       power_auto = config && config->power_auto;
-      push_telemetry = state->hud.enabled || state->fan_duty.has_value();
-      if (verbose) std::cerr << "settings reloaded\n";
+      push_telemetry = state->hud.enabled || state->fan_duty.has_value() ||
+                       (state->hud_right && state->hud_right->enabled);
+      // Reloading without applying left the daemon holding settings it never
+      // sent: any CLI change made while the daemon runs cannot touch the
+      // device itself -- the port is exclusive -- so it would sit unapplied
+      // until the next reconnect.
+      if (device && device->is_connected()) restore(*device);
+      if (verbose) std::cerr << "settings reloaded and applied\n";
     }
 
     // Tick once a second so we're responsive to both cadences and SIGTERM.
@@ -1918,7 +1957,18 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
       // surface as "HUD shows zeros" instead of "device didn't respond".
       if (first_handshake_ok && device->is_connected()) {
         auto metrics = monitor.sample();
-        device->send_sysinfo(build_sysinfo(state->hud.metrics, metrics));
+        // Both zones' metrics, or a split screen shows 0 in the half whose
+        // labels were never pushed -- the device only fills values it was
+        // given, and the overlay renders the label regardless.
+        std::vector<std::string> labels = state->hud.metrics;
+        if (state->hud_right) {
+          for (const auto& m : state->hud_right->metrics) {
+            if (std::find(labels.begin(), labels.end(), m) == labels.end()) {
+              labels.push_back(m);
+            }
+          }
+        }
+        device->send_sysinfo(build_sysinfo(labels, metrics));
       }
     }
   }
@@ -2003,7 +2053,15 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
   }
 
   // Parse hud configure flags from args[1..].
-  reed::HudConfig h = state.hud;  // start from current so unspecified flags stick
+  // --zone is parsed below, so start from the left zone and switch to the
+  // right one once we know. Editing the right zone starts from whatever it
+  // already had, or from the left zone the first time.
+  bool zone_right = false;
+  for (size_t probe = 0; probe + 1 < args.size(); ++probe) {
+    if (args[probe] == "--zone" && args[probe + 1] == "right") zone_right = true;
+  }
+  reed::HudConfig h = (zone_right && state.hud_right) ? *state.hud_right
+                                                      : state.hud;
   h.enabled = true;
   bool metrics_provided = false;
 
@@ -2024,7 +2082,15 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
       }
       return args[i];
     };
-    if (a == "--metrics") {
+    if (a == "--zone") {
+      const std::string z = next("--zone");
+      if (z == "right") {
+        zone_right = true;
+      } else if (z != "left") {
+        std::cerr << "Invalid --zone: " << z << "  (left | right)\n";
+        return 1;
+      }
+    } else if (a == "--metrics") {
       h.metrics = split_csv(next("--metrics"));
       for (auto& m : h.metrics) m = canonical_hud_label(m);
       metrics_provided = true;
@@ -2126,7 +2192,11 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
   if (h.cpu_name.empty()) h.cpu_name = reed::SystemMonitor::detect_cpu_name();
   if (h.gpu_name.empty()) h.gpu_name = reed::SystemMonitor::detect_gpu_name();
 
-  state.hud = h;
+  if (zone_right) {
+    state.hud_right = h;
+  } else {
+    state.hud = h;
+  }
   if (!reed::ConfigManager::save_state(state)) {
     std::cerr << "Failed to save state\n";
     return 1;

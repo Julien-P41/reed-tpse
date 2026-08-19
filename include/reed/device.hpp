@@ -158,11 +158,11 @@ class Device {
   // 90 is mirrored. There is no way to read the current value back, so a
   // wrong guess is only visible after the restart.
   std::optional<Response> set_rotation(int degree);
-  // keep_listed=false deletes the named files (`include`); keep_listed=true
-  // deletes everything NOT named (`exclude`) -- the vendor's post-upload
-  // sweep. Unused by the CLI, which deletes over adb instead.
-  std::optional<Response> delete_media(const std::vector<std::string>& files,
-                                       bool keep_listed = false);
+  // No delete over serial. `mediaDelete` exists -- {"type":"custom"} with
+  // either `include` (delete these) or `exclude` (delete everything else) --
+  // but deleting over adb needs no serial port, and the daemon holds that
+  // port exclusively. The shape is recorded in docs/vendor-protocol.md if it
+  // is ever wanted.
 
   // HUD: on-device telemetry overlay support.
   // Firmware renders up to 3 metrics from a fixed label set on top of the

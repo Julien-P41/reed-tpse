@@ -586,22 +586,6 @@ std::optional<Response> Device::set_screen_power(bool enable) {
                       picojson::value(obj).serialize());
 }
 
-std::optional<Response> Device::delete_media(
-    const std::vector<std::string>& files, bool keep_listed) {
-  picojson::array file_arr;
-  for (const auto& f : files) {
-    file_arr.push_back(picojson::value(f));
-  }
-  picojson::object obj;
-  // Both keys are real, and they are opposites. KANALI sends `exclude` after
-  // every upload to garbage-collect anything not in its library, and
-  // `include` to delete named files. `type` is required; only "custom" seen.
-  obj["type"] = picojson::value(std::string("custom"));
-  obj[keep_listed ? "exclude" : "include"] = picojson::value(file_arr);
-  std::string content = picojson::value(obj).serialize();
-  return send_command("POST", "mediaDelete", content);
-}
-
 std::optional<Response> Device::send_sysinfo(
     const std::vector<SysinfoData>& data) {
   picojson::object cpu, gpu, memory, motherboard, disk, network;
