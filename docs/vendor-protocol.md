@@ -84,25 +84,30 @@ five, applied before anything can race it. **Not yet implemented.**
 ## `rotate` — Mirror Mode, and it works
 
 ```
-POST rotate {"degree":90}    ->  200, then the device RESTARTS
-                                 (re-enumerates on a new USB address)
-   on reconnect: POST conn x2, POST config {... "rotate":90 ...}
-POST rotate {"degree":270}   ->  200, restarts again
+POST rotate {"degree":90}    ->  200. Nothing happens yet.
+                                 The value is STORED.
+   ... at the next device restart, the panel comes up rotated.
 ```
 
 Only two values are used: **270 is this unit's baseline, 90 is mirrored** —
 180° apart, matching the vendor's description ("a mirror image of PANORAMA
-screen for users with a left-mounted chassis") and its warning that the cooler
-restarts on confirming.
+screen for users with a left-mounted chassis").
 
-⚠ **This supersedes the earlier conclusion that `rotate` is unimplemented on
-V1.0.11.** That was measured by watching Android's `mRotation` for a live
-transform; the setting is stored and applied at restart, so nothing was visible
-in the window being measured. The absent-callback heuristic mispredicted here,
-as it did for `waterfallMode`.
+**`rotate` does not restart the device.** Tested directly on V1.0.11:
+`rotate--90` is dispatched, the panel does not move, USB does not drop — and
+after an `adb reboot` the panel comes up 180° over. The capture *looks* like
+the device restarts on receipt because KANALI re-enumerates right afterwards,
+but no `reboot` command appears anywhere in the traffic; the app bundles
+`adb.exe`, so it is almost certainly rebooting the cooler itself. That is what
+its "PANORAMA water cooling will restart upon confirming" dialog is doing.
+
+⚠ **This still supersedes the original conclusion that `rotate` is
+unimplemented.** It works; it is just deferred. Watching Android's `mRotation`
+for a live transform could never have seen it.
 
 ⚠ Because 270 is baseline, a "neutral-looking" `degree: 0` or `180` leaves the
-panel **90° out** — which looks exactly like waterfall mode.
+panel **90° out** — which looks exactly like waterfall mode. This is the most
+likely cause of the rotation incident earlier in this project.
 
 ## `fanLCDSet` — tiers are (duty, curve) pairs
 

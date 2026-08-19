@@ -824,17 +824,22 @@ Treat it as a hint about the live path, not as evidence an endpoint is inert.
 this firmware:
 
 ```
-POST rotate {"degree":90}   -> 200, then the device restarts and
-                               re-enumerates on a new USB address
-POST rotate {"degree":270}  -> 200, restarts again
+POST rotate {"degree":90}   -> 200. Nothing happens yet; the value is
+                               stored and applies at the next restart.
 ```
 
 Only two values are ever used, and they are 180° apart: **270 is this unit's
 baseline and 90 is the mirrored state**, which fits the vendor's own wording --
-*"a mirror image of PANORAMA screen for users with a left-mounted chassis"* --
-and its warning that *"PANORAMA water cooling will restart upon confirming"*.
-The value is also a field inside the `config` blob (`waterBlockScreen.rotate`),
-re-asserted on every connect.
+*"a mirror image of PANORAMA screen for users with a left-mounted chassis"*.
+The value is also a field inside the `config` blob
+(`waterBlockScreen.rotate`), re-asserted on every connect.
+
+**It does not restart the device.** Sending it changes nothing visible; the
+panel turns at the cooler's next start. Verified by sending `90`, seeing
+`rotate--90` dispatched with no change, then rebooting and finding the panel
+180° over. KANALI appears to restart on confirm only because it bundles
+`adb.exe` -- no `reboot` frame exists in any capture. `reed-tpse rotate` does
+the `adb reboot` for you, or the command would look inert.
 
 ⚠ **This corrects an earlier conclusion here that `rotate` was unimplemented on
 V1.0.11.** That was measured by watching Android's `mRotation` for a live

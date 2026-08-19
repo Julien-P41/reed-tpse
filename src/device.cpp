@@ -572,6 +572,12 @@ std::optional<Response> Device::send_config(const FullConfig& config,
   return send_command("POST", "config", picojson::value(obj).serialize());
 }
 
+std::optional<Response> Device::set_rotation(int degree) {
+  picojson::object obj;
+  obj["degree"] = picojson::value(static_cast<double>(degree));
+  return send_command("POST", "rotate", picojson::value(obj).serialize());
+}
+
 std::optional<Response> Device::set_screen_power(bool enable) {
   picojson::object obj;
   obj["enable"] = picojson::value(enable);

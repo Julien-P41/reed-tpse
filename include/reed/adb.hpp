@@ -20,6 +20,12 @@ class Adb {
   static std::optional<std::vector<std::string>> list_presets();
   static bool remove(const std::string& filename);
 
+  // Restart the cooler alone -- an ordinary Android reboot of the internal
+  // SoC, ~20s to a usable UI, with the PC untouched. This is how settings
+  // that only apply at boot (rotation) actually take effect; the vendor app
+  // bundles adb.exe and does the same thing.
+  static bool reboot();
+
  private:
   static std::optional<std::string> run_command(
       const std::vector<std::string>& args);

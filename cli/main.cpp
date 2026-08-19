@@ -52,6 +52,7 @@ static void print_usage(const char* prog) {
          "                           --split <left> <right> for two zones)\n"
          "  brightness <0-100>      Set display brightness\n"
          "  screen <on|off>         Turn the panel itself on or off\n"
+         "  rotate <normal|mirror>  Mirror Mode -- RESTARTS the cooler\n"
          "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
          "                          stops handshaking\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
@@ -423,6 +424,87 @@ static int cmd_raw(const std::string& port, const std::string& method,
 // Panel power, the vendor's screen on/off. Not the same as brightness 0:
 // `enable:false` blanks the panel entirely, and the setting is volatile like
 // everything else here, so the daemon re-asserts it on connect.
+// Mirror Mode. Two things make this different from every other command here.
+//
+// It does NOT take effect when sent: `POST rotate` is stored, and the panel
+// only turns when the cooler next restarts. Measured -- `rotate--90` is
+// dispatched, nothing changes, and the new orientation appears after a reboot.
+// (KANALI looks like it restarts on confirm because it bundles adb.exe and
+// reboots the cooler itself; no `reboot` command goes over the wire.) So this
+// reboots the device for you, or the command would appear to do nothing.
+//
+// And there is no read-back: nothing on the host can tell you the current
+// rotation, so a wrong value only shows itself after the restart.
+static int cmd_rotate(const std::string& port, const std::string& arg,
+                      bool force, bool verbose) {
+  int degree;
+  if (arg == "normal") {
+    degree = 270;  // upright on the unit this was captured from
+  } else if (arg == "mirror") {
+    degree = 90;
+  } else {
+    degree = std::atoi(arg.c_str());
+    if (degree != 0 && degree != 90 && degree != 180 && degree != 270) {
+      std::cerr << "Usage: reed-tpse rotate <normal|mirror|0|90|180|270>\n";
+      return 1;
+    }
+  }
+
+  if (degree != 90 && degree != 270) {
+    std::cerr << "⚠ Only 90 and 270 are known-good. The vendor never sends "
+                 "0 or 180,\n"
+                 "  and on this hardware upright IS 270 -- so 0 or 180 leaves "
+                 "the panel\n"
+                 "  90° out, which looks exactly like waterfall mode.\n";
+    if (!force) {
+      std::cerr << "  Re-run with --force if you meant it.\n";
+      return 1;
+    }
+  }
+
+  if (!force) {
+    std::cout << "This reboots the cooler -- rotation only applies at its next\n"
+                 "start. The panel goes dark for ~20s. The PC is unaffected.\n"
+                 "Continue? [y/N] ";
+    std::string answer;
+    std::getline(std::cin, answer);
+    if (answer != "y" && answer != "Y") {
+      std::cout << "Cancelled.\n";
+      return 0;
+    }
+  }
+
+  reed::Device device(port, verbose);
+  if (!device.connect()) {
+    std::cerr << "Failed to connect to " << port << "\n";
+    return 1;
+  }
+  device.drain();
+
+  if (!device.set_rotation(degree)) {
+    std::cerr << "No response to 'POST rotate'\n";
+    return 1;
+  }
+
+  std::cout << "Rotation stored: " << degree << "°.\n";
+
+  if (!reed::Adb::is_device_connected()) {
+    std::cout << "  ⚠ adb is not available, so the cooler was not restarted.\n"
+                 "    Nothing changes until it next starts -- and it will then\n"
+                 "    come up rotated, which is easy to forget about.\n";
+    return 0;
+  }
+
+  std::cout << "  Restarting the cooler to apply it...\n";
+  if (!reed::Adb::reboot()) {
+    std::cerr << "  Reboot failed. The setting is stored and will apply at the "
+                 "next start.\n";
+    return 1;
+  }
+  std::cout << "  Done. Give it ~20s, then start the daemon again.\n";
+  return 0;
+}
+
 static int cmd_screen(const std::string& port, const std::string& arg,
                       bool verbose) {
   bool enable;
@@ -2239,6 +2321,12 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_delete(args);
+  } else if (command == "rotate") {
+    if (args.empty()) {
+      std::cerr << "Usage: reed-tpse rotate <normal|mirror>\n";
+      return 1;
+    }
+    return cmd_rotate(port, args[0], force, verbose);
   } else if (command == "screen") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse screen <on|off>\n";

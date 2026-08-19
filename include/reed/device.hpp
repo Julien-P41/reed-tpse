@@ -154,6 +154,13 @@ class Device {
   // response to this command -- nor to `conn` -- so a null return is normal.
   std::optional<Response> send_config(const FullConfig& config,
                                       const ScreenConfig& screen);
+
+  // Mirror Mode. The device ACKs, then RESTARTS -- it drops off USB and
+  // re-enumerates a few seconds later. Captured values are 90 and 270 only,
+  // 180 degrees apart; on the unit this was captured from, 270 is upright and
+  // 90 is mirrored. There is no way to read the current value back, so a
+  // wrong guess is only visible after the restart.
+  std::optional<Response> set_rotation(int degree);
   // keep_listed=false deletes the named files (`include`); keep_listed=true
   // deletes everything NOT named (`exclude`) -- the vendor's post-upload
   // sweep. Unused by the CLI, which deletes over adb instead.

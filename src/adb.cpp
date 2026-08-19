@@ -175,6 +175,10 @@ std::optional<std::vector<std::string>> Adb::list_presets() {
   return presets;
 }
 
+bool Adb::reboot() {
+  return run_command({"reboot"}).has_value();
+}
+
 bool Adb::remove(const std::string& filename) {
   std::string remote_path = std::string(MEDIA_PATH) + filename;
   auto result = run_command({"shell", "rm", remote_path});
