@@ -35,9 +35,22 @@ What this fork adds on top:
   other's replies.
 - **HUD metric coverage** completed against the firmware's label set, with a
   warning for any metric the host cannot actually source instead of a silent 0.
+- **The vendor's own payloads**, recovered from captured KANALI 1.2.1 traffic
+  rather than guessed: the real fan tiers and their temperature curves, the
+  one-frame `config` apply the app sends after connecting, and the overlay
+  command. Checked in the test suite against the captured bytes.
+- **Panel power, Mirror Mode, media filters, playlists and Screen Splitting**
+  with independent metrics and colour per zone.
+- **Seven host power events**, including `suspend` and `resume`, with a
+  systemd sleep hook to drive them.
 
 Everything above was verified against real hardware (Panorama 360 ARGB,
 firmware V1.0.11); where something is only inferred, the text says so.
+
+The protocol reference lives in
+[docs/vendor-protocol.md](docs/vendor-protocol.md), and the measured firmware
+behaviour behind these features in
+[docs/firmware-notes.md](docs/firmware-notes.md).
 
 ## Currently supported features
 
@@ -48,8 +61,8 @@ firmware V1.0.11); where something is only inferred, the text says so.
 - Panel power, Mirror Mode, Screen Splitting, media filters, playlists
 - Black screen instead of the demo loop when the host is off (`sleep-display`)
 - Firmware presets, played from the device's own storage (`preset`)
-- Host power events -- lock / unlock / shutdown -- manually or mirrored
-  automatically by the daemon (`power`)
+- Host power events -- lock, unlock, shutdown, suspend, resume, AC and battery
+  -- manually or mirrored automatically by the daemon (`power`)
 - Raw protocol passthrough for reaching any endpoint
 - List and delete media files on device
 - On-device system telemetry overlay (CPU/GPU temp, usage, frequency, voltage, power; RAM; motherboard/disk temps; date & time), with a warning for any metric this host cannot source
@@ -62,23 +75,30 @@ firmware V1.0.11); where something is only inferred, the text says so.
 
 Open:
 
-- [ ] Fan `smartMode` curve values -- shape known, values need a captured
-      vendor payload
-- [ ] Screen Splitting mode (6-metric, two-zone layout)
+- [ ] `waterfallMode` -- the payload key is unknown. The handler does not
+      validate, so it never names its field in an exception, and KANALI 1.2.1
+      has no UI control for it, so there is nothing to capture. Needs a build
+      of the vendor app that exposes the toggle.
 - [ ] Network throughput (the `PcInfo` blob already carries it; nothing
       collects it host-side)
-- [ ] Custom overlay layouts, beyond the firmware's 9 anchor points and
-      3-metric cap
+- [ ] `status` and `info` cannot run while the daemon holds the port. They are
+      reads, so failing is avoidable -- the daemon would have to expose its
+      last `STATE all` over a socket or a file.
+- [ ] Custom overlay layouts. The firmware places metrics itself: three at
+      most, mid-height, with only `align` (Left/Center/Right) under host
+      control. Anything else means compositing frames host-side.
 
-Done in this fork: `status`, `raw`, `fan`, `preset`, `sleep-display`, `power`
-(+ daemon auto mode), the full HUD metric set, frame CRC/length validation,
-protocol and config tests, exclusive port locking, the system/user unit split
+Done in this fork: `status`, `raw`, `fan` (vendor tiers, arbitrary duty and
+Smart Mode curves), `screen`, `rotate`, `preset`, `sleep-display`, `filter`,
+`power` (all seven events, including suspend/resume), playlists and Screen
+Splitting with independent per-zone overlays, the full HUD metric set, the
+one-frame `config` apply, frame CRC/length validation, payload tests against
+captured vendor traffic, exclusive port locking, the system/user unit split
 and a udev rule.
 
 `rotate` (Mirror Mode) works but applies only at the cooler's next start, so
-`reed-tpse rotate` reboots the device for you. `waterfallMode` is present in
-the firmware but its payload key is unknown and nothing has been observed to
-change; KANALI 1.2.1 has no UI control for it. Details below.
+`reed-tpse rotate` reboots the device for you. See
+[docs/firmware-notes.md](docs/firmware-notes.md).
 
 ## Documentation
 
