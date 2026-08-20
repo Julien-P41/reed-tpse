@@ -44,6 +44,19 @@ if(REED_INSTALL_UDEV)
     message(STATUS "udev rule will be installed to ${REED_UDEV_DIR}")
 endif()
 
+# systemd sleep hook. Same reasoning as the udev rule: systemd only reads
+# /usr/lib/systemd/system-sleep, so installing under CMAKE_INSTALL_PREFIX would
+# look successful and never run. Off by default -- it stops the daemon on the
+# way into suspend, which is not something to enable behind a user's back.
+option(REED_INSTALL_SLEEP_HOOK "Install the suspend/resume hook" OFF)
+set(REED_SLEEP_HOOK_DIR "/usr/lib/systemd/system-sleep"
+    CACHE PATH "Where to install the sleep hook")
+if(REED_INSTALL_SLEEP_HOOK)
+    install(PROGRAMS systemd/reed-tpse-sleep DESTINATION ${REED_SLEEP_HOOK_DIR}
+            RENAME reed-tpse)
+    message(STATUS "sleep hook will be installed to ${REED_SLEEP_HOOK_DIR}")
+endif()
+
 # Hardware-free checks over the protocol layer. Off by default so the normal
 # build stays a single binary.
 option(REED_BUILD_TESTS "Build the protocol unit tests" OFF)
