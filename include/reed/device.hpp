@@ -158,9 +158,6 @@ class Device {
 
   // Read via the STATE method. The firmware implements no GET; STATE is the
   // read verb and POST is the write verb.
-  std::optional<Response> query(const std::string& cmd_type,
-                                const std::string& content = "");
-
   std::optional<DeviceInfo> handshake();
   std::optional<DeviceStatus> get_status();
   std::optional<Response> set_screen_config(const ScreenConfig& config);
@@ -194,8 +191,9 @@ class Device {
   // Firmware renders up to 3 metrics from a fixed label set on top of the
   // configured media. Labels and the PcInfo shape are defined by the cooler.
   std::optional<Response> send_sysinfo(const std::vector<SysinfoData>& data);
-  std::optional<Response> set_sysinfo_display(
-      const std::vector<std::string>& labels);
+  // No set_sysinfo_display: `POST sysinfoDisplay {"items":[...]}` is accepted
+  // by the firmware but KANALI never sends it, and it cannot carry colour or
+  // badges. The overlay goes out through set_overlay instead.
 
   // The vendor's overlay command: styling and metric list in one frame,
   // without touching the media. `POST preset` -- unrelated to the screen

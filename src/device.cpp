@@ -362,13 +362,9 @@ std::optional<Response> Device::send_command(const std::string& request_state,
   return parsed;
 }
 
-std::optional<Response> Device::query(const std::string& cmd_type,
-                                      const std::string& content) {
-  return send_command("STATE", cmd_type, content);
-}
 
 std::optional<DeviceStatus> Device::get_status() {
-  auto response = query("all");
+  auto response = send_command("STATE", "all", "");
 
   if (!response || !response->json) {
     return std::nullopt;
@@ -723,18 +719,6 @@ std::optional<Response> Device::send_sysinfo(
   // body and gets the device's status back on the same exchange, which is why
   // it never needs a separate read. Both verbs are accepted here.
   return send_command("STATE", "all", content, false);
-}
-
-std::optional<Response> Device::set_sysinfo_display(
-    const std::vector<std::string>& labels) {
-  picojson::array items;
-  for (const auto& l : labels) {
-    items.push_back(picojson::value(l));
-  }
-  picojson::object obj;
-  obj["items"] = picojson::value(items);
-  std::string content = picojson::value(obj).serialize();
-  return send_command("POST", "sysinfoDisplay", content, false);
 }
 
 std::optional<Response> Device::set_overlay(

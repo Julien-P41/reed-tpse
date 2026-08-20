@@ -270,6 +270,54 @@ std::string metric_hint(const std::string& label) {
 // field and writes the whole thing back, so treating a bad read as first run
 // persists defaults over the media, HUD, fan and filter settings that were in
 // there. Refuse instead and say why.
+// The `settings` block, derived from an overlay config plus the media filter.
+// Shared by the screen config, the preset id and the overlay command, which
+// all carry the same block.
+static reed::DisplaySettings settings_from(const reed::HudConfig& hud,
+                                           const std::string& filter,
+                                           int filter_opacity) {
+  reed::DisplaySettings out;
+  out.align = hud.align;
+  out.color = hud.color;
+  out.badges = hud.badges;
+  out.filter = filter;
+  out.filter_opacity = filter_opacity;
+  return out;
+}
+
+// The one place a ScreenConfig is derived from saved state.
+//
+// This mapping used to be written out at each call site -- five copies of the
+// HUD-to-settings assignment and three of the split right-zone block. They
+// drifted: one copy assigned the right zone before its source was populated,
+// shipping a zone with default styling, and that only showed up on the panel.
+static reed::ScreenConfig screen_config_from(const reed::DisplayState& state) {
+  reed::ScreenConfig cfg;
+  cfg.media = state.media;
+  cfg.ratio = state.ratio;
+  cfg.screen_mode = state.screen_mode;
+  cfg.play_mode = state.play_mode;
+
+  // The filter belongs to the media, not the overlay: it applies whether or
+  // not the HUD is on.
+  cfg.settings = settings_from(state.hud, state.filter, state.filter_opacity);
+  if (state.hud.enabled) cfg.sysinfo_display = state.hud.metrics;
+
+  if (cfg.screen_mode == "Screen Splitting") {
+    cfg.split = true;
+    // The right zone mirrors the left unless it has its own configuration.
+    cfg.split_settings_right = cfg.settings;
+    if (state.hud_right) {
+      const reed::HudConfig& r = *state.hud_right;
+      cfg.split_settings_right.align = r.align;
+      cfg.split_settings_right.color = r.color;
+      cfg.split_settings_right.badges = r.badges;
+      if (r.enabled) cfg.split_sysinfo_right = r.metrics;
+    }
+  }
+  return cfg;
+}
+
 static std::optional<reed::DisplayState> load_state_for_update() {
   reed::LoadStatus status = reed::LoadStatus::Ok;
   auto state = reed::ConfigManager::load_state(&status);
@@ -607,29 +655,7 @@ static int cmd_filter(const std::string& port, const std::string& name,
   device.drain();
   device.handshake();
 
-  reed::ScreenConfig cfg;
-  cfg.media = state->media;
-  cfg.ratio = state->ratio;
-  cfg.screen_mode = state->screen_mode;
-  cfg.play_mode = state->play_mode;
-  cfg.settings.align = state->hud.align;
-  cfg.settings.color = state->hud.color;
-  cfg.settings.badges = state->hud.badges;
-  cfg.settings.filter = state->filter;
-  cfg.settings.filter_opacity = state->filter_opacity;
-  if (state->hud.enabled) cfg.sysinfo_display = state->hud.metrics;
-  if (cfg.screen_mode == "Screen Splitting") {
-    cfg.split = true;
-    cfg.split_settings_right = cfg.settings;
-    if (state->hud_right) {
-      cfg.split_settings_right.align = state->hud_right->align;
-      cfg.split_settings_right.color = state->hud_right->color;
-      cfg.split_settings_right.badges = state->hud_right->badges;
-      if (state->hud_right->enabled) {
-        cfg.split_sysinfo_right = state->hud_right->metrics;
-      }
-    }
-  }
+  const reed::ScreenConfig cfg = screen_config_from(*state);
 
   if (!device.set_screen_config(cfg)) {
     std::cerr << "No response to 'POST waterBlockScreenId'\n";
@@ -1055,11 +1081,7 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
   reed::DisplaySettings settings;
   std::vector<std::string> sysinfo;
   if (prev) {
-    settings.align = prev->hud.align;
-    settings.color = prev->hud.color;
-    settings.badges = prev->hud.badges;
-    settings.filter = prev->filter;
-    settings.filter_opacity = prev->filter_opacity;
+    settings = settings_from(prev->hud, prev->filter, prev->filter_opacity);
     if (prev->hud.enabled) sysinfo = prev->hud.metrics;
   }
 
@@ -1484,35 +1506,15 @@ static int cmd_display(const std::string& port,
   auto state = load_state_for_update();
   if (!state) return 1;
 
-  reed::ScreenConfig config;
-  config.media = media_files;
-  config.ratio = ratio;
+  // Apply this call's arguments to the saved state, then derive the payload
+  // from it -- so what goes to the device and what is stored cannot disagree.
+  state->media = media_files;
+  state->ratio = ratio;
   // Without this the struct default ("Single") went out on every call, so a
   // multi-file `display` only ever showed the first file.
-  config.play_mode = play_mode.empty() ? state->play_mode : play_mode;
-
-  // The filter is `reed-tpse filter`'s business; carry the stored value
-  // through so changing media does not silently clear it.
-  config.settings.filter = state->filter;
-  config.settings.filter_opacity = state->filter_opacity;
-  config.settings.align = state->hud.align;
-  config.settings.color = state->hud.color;
-  config.settings.badges = state->hud.badges;
-  if (split) {
-    config.screen_mode = "Screen Splitting";
-    config.split = true;
-    // Has to come after `settings` is filled, or the right zone ships blank.
-    config.split_settings_right = config.settings;
-    // The right zone follows its own HUD when one has been configured with
-    // `hud config --zone right`; otherwise it mirrors the left.
-    if (state->hud_right) {
-      const reed::HudConfig& r = *state->hud_right;
-      config.split_settings_right.align = r.align;
-      config.split_settings_right.color = r.color;
-      config.split_settings_right.badges = r.badges;
-      if (r.enabled) config.split_sysinfo_right = r.metrics;
-    }
-  }
+  if (!play_mode.empty()) state->play_mode = play_mode;
+  if (split) state->screen_mode = "Screen Splitting";
+  const reed::ScreenConfig config = screen_config_from(*state);
 
   const int effective_brightness =
       brightness_given ? brightness : state->brightness;
@@ -1522,10 +1524,6 @@ static int cmd_display(const std::string& port,
   // failing here refuses a change it is about to make anyway -- which is what
   // `display` did whenever the daemon was running.
   if (brightness_given) state->brightness = brightness;
-  state->media = media_files;
-  state->ratio = ratio;
-  state->play_mode = config.play_mode;
-  state->screen_mode = config.screen_mode;
   state->preset.reset();  // custom media and a preset are mutually exclusive
   reed::ConfigManager::save_state(*state);
 
@@ -1764,35 +1762,9 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
 
   reed::ScreenConfig screen_config;
   auto rebuild_screen_config = [&]() {
-    screen_config = reed::ScreenConfig{};
-    screen_config.media = state->media;
-    screen_config.ratio = state->ratio;
-    screen_config.screen_mode = state->screen_mode;
-    screen_config.play_mode = state->play_mode;
-    if (state->hud.enabled) {
-      screen_config.sysinfo_display = state->hud.metrics;
-      screen_config.settings.align = state->hud.align;
-      screen_config.settings.color = state->hud.color;
-      screen_config.settings.badges = state->hud.badges;
-    }
-    // The filter is part of the media, not the overlay -- it applies whether
-    // or not the HUD is on.
-    screen_config.settings.filter = state->filter;
-    screen_config.settings.filter_opacity = state->filter_opacity;
-    // A saved split layout has to be rebuilt as one, or the daemon would
-    // re-apply it as a single full-screen config on the next connect.
-    if (screen_config.screen_mode == "Screen Splitting") {
-      screen_config.split = true;
-      screen_config.split_settings_right = screen_config.settings;
-      if (state->hud_right) {
-        const reed::HudConfig& r = *state->hud_right;
-        screen_config.split_settings_right.align = r.align;
-        screen_config.split_settings_right.color = r.color;
-        screen_config.split_settings_right.badges = r.badges;
-        if (r.enabled) screen_config.split_sysinfo_right = r.metrics;
-      }
-    }
+    screen_config = screen_config_from(*state);
   };
+
   rebuild_screen_config();
 
   auto device = std::make_unique<reed::Device>(actual_port, verbose);
@@ -2347,6 +2319,12 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
 
   // Apply live if we have a device. Non-fatal if not connected — state is
   // saved and the daemon will apply it on next start.
+  if (daemon_holds_port(port)) {
+    std::cout << "HUD saved. The daemon holds the port and applies it within "
+                 "a second.\n";
+    return 0;
+  }
+
   if (!port.empty()) {
     reed::Device device(port, verbose);
     if (device.connect() && device.handshake()) {
@@ -2356,12 +2334,8 @@ static int cmd_hud(const std::string& port, const std::vector<std::string>& args
       // `POST preset` carries styling and metrics together and leaves the
       // media alone -- the vendor's own overlay path. Re-sending a whole
       // screen config here used to reload the video on every HUD tweak.
-      reed::DisplaySettings settings;
-      settings.align = h.align;
-      settings.color = h.color;
-      settings.badges = h.badges;
-      settings.filter = state.filter;
-      settings.filter_opacity = state.filter_opacity;
+      const reed::DisplaySettings settings =
+          settings_from(h, state.filter, state.filter_opacity);
       device.set_overlay(settings, h.enabled ? h.metrics
                                              : std::vector<std::string>{});
 
