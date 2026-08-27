@@ -49,8 +49,9 @@ static void print_usage(const char* prog) {
          "                           a duty, --reset restores the vendor default)\n"
          "  screen <on|off>         Turn the panel itself on or off\n"
          "  rotate <normal|mirror>  Mirror Mode ! RESTARTS the cooler\n"
-         "  sleep-display <on|off>  Black screen (vs demo loop) when the host\n"
-         "                          stops handshaking\n"
+         "  sleep-display <on|off>  What the panel shows once the host stops\n"
+         "                          handshaking: on = the firmware\'s standby\n"
+         "                          animation, off = black\n"
          "  preset <name|list>      Show a firmware-bundled preset\n"
          "  upload <file>\n"
          "  list                    List media files on device\n"
@@ -720,6 +721,12 @@ static int cmd_sleep_display(const std::string& port, const std::string& arg,
     return 1;
   }
 
+  // `displayInSleep` reads backwards from the outside: it is the device's own
+  // "display something while the host is asleep", so ON gives the standby
+  // animation and OFF gives a black panel. Measured both ways through a full
+  // disconnect timeout. This tool passes the value straight through to match
+  // the vendor's own toggle.
+  //
   // The device answers 200 with an empty body either way, so the reply proves
   // nothing. Persist it instead and let the daemon re-apply, since the setting
   // lives in controller RAM and is lost whenever USB power drops.
@@ -748,13 +755,15 @@ static int cmd_sleep_display(const std::string& port, const std::string& arg,
     std::cerr << "Warning: could not persist sleep-display state\n";
   }
 
-  std::cout << "Sleep display " << (enable ? "enabled" : "disabled") << ".\n";
+  std::cout << "Sleep display " << (enable ? "on" : "off") << ".\n";
   if (enable) {
-    std::cout << "  Panel goes black when the host stops handshaking.\n";
+    std::cout << "  Once the host stops handshaking the panel runs the "
+                 "firmware's standby\n  animation.\n";
   } else {
-    std::cout << "  Panel falls back to the firmware's demo loop when the "
-                 "host stops handshaking.\n";
+    std::cout << "  Once the host stops handshaking the panel goes black.\n";
   }
+  std::cout << "  Either way it takes about 60s -- the device waits out its "
+               "own timeout\n  before switching.\n";
   return 0;
 }
 

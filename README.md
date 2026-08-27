@@ -24,8 +24,8 @@ What this fork adds on top:
   verb, and `STATE all` is the only endpoint that returns a body.
 - **LCD fan speed control** (`fan`) — named tiers or any duty 0-100%. Needed two
   endpoints acting together, which is why it had been written off as impossible.
-- **Sleep behaviour** (`sleep-display`) — black panel instead of the firmware's
-  sleep animation when the host stops talking.
+- **Sleep behaviour** (`sleep-display`) — choose what the panel shows once the
+  host stops talking: the firmware's standby animation, or black.
 - **Firmware presets** (`preset`) — the clips shipped in the device's own system
   image, no upload required.
 - **`raw` passthrough** — any method/endpoint/body, so an undiscovered endpoint
@@ -59,7 +59,8 @@ behaviour behind these features in
 - Read device status: fan/pump RPM, health warnings, free storage
 - LCD fan speed control (named tiers, any duty 0-100%, or Smart Mode curves)
 - Panel power, Mirror Mode, Screen Splitting, media filters, playlists
-- Black screen instead of the demo loop when the host is off (`sleep-display`)
+- Choose what the panel shows when the host is off -- the firmware's standby
+  animation or a black screen (`sleep-display`)
 - Firmware presets, played from the device's own storage (`preset`)
 - Host power events -- lock, unlock, shutdown, suspend, resume, AC and battery
   -- manually or mirrored automatically by the daemon (`power`)
@@ -230,7 +231,7 @@ reed-tpse raw <METHOD> <ENDPOINT> [JSON]
 reed-tpse fan <low|mid|high|full> # LCD fan RPM, or set a tier
 reed-tpse screen <on|off>        # Panel power
 reed-tpse rotate <normal|mirror> # Mirror Mode (reboots the cooler)
-reed-tpse sleep-display <on|off> # Black screen vs demo loop when host is off
+reed-tpse sleep-display <on|off> # on = standby animation, off = black
 reed-tpse preset <name|list>     # Show a firmware-bundled preset
 reed-tpse upload <file>          # Upload media file
 reed-tpse list                   # List files on device
@@ -434,7 +435,7 @@ curve has to come from a capture, not from inference.
 ### Host power events
 
 ```bash
-reed-tpse power shutdown    # blanks the panel (with sleep-display on)
+reed-tpse power shutdown    # switches the panel to the standby clip
 reed-tpse power lock        # standby clip
 reed-tpse power unlock      # back to the media
 reed-tpse power ac          # host on mains
@@ -465,10 +466,13 @@ With `power_auto`, the daemon mirrors the host state:
   keepalive cadence and sends `lock-screen` / `unlock-screen` as it changes
 - **on exit** -- sends `shutdown`
 
-That last one is the useful one. The daemon is stopped as part of the host
-shutting down, so with `sleep-display on` the panel blanks right then, instead
-of waiting out the ~60s keepalive timeout. A boot/shutdown script no longer has
-to hold a keepalive alive to keep the screen from reverting.
+That last one is the useful one: the daemon is stopped as part of the host
+shutting down, so the device is told rather than left to time out.
+
+⚠ It does not blank the panel. `shutdown` switches to the standby clip, the
+same as `lock-screen` -- see [docs/firmware-notes.md](docs/firmware-notes.md).
+For a dark panel at shutdown, either send `reed-tpse screen off`, or set
+`sleep-display off` and let the ~60s timeout expire.
 
 #### A custom lock screen
 
@@ -555,36 +559,38 @@ remembered, `display` clears it, and the daemon re-applies whichever is active.
 ### Sleep display
 
 ```bash
-reed-tpse sleep-display on     # panel goes black when the host stops handshaking
-reed-tpse sleep-display off    # panel falls back to the firmware's sleep animation
+reed-tpse sleep-display on     # standby animation once the host stops handshaking
+reed-tpse sleep-display off    # black panel instead
 ```
 
-The device reverts to firmware-drawn content ~60s after the last handshake --
+The device switches to firmware-drawn content ~60s after the last handshake --
 when the PC powers off, or whenever no process is holding the connection.
-`sleep-display on` makes that fallback a black screen instead of the sleep
-animation.
+`sleep-display` chooses what that is.
 
-Verified on firmware V1.0.11 by measuring the panel's mean luminance over adb
-`screencap`, 150s after the last handshake:
+**The name reads backwards.** `displayInSleep` is the device's own "display
+something while the host is asleep", not "blank the display":
 
-| `displayInSleep` | Panel after the keepalive timeout |
+| `displayInSleep` | Panel after the ~60s timeout |
 |---|---|
-| `{"enable":true}`  | black (luminance 0) |
-| `{"enable":false}` | sleep animation (luminance ~58-63) |
-| `{"value":true}`   | silently ignored -- behaves as disabled |
+| `{"enable":true}`  | the firmware's standby animation |
+| `{"enable":false}` | black |
+| `{"value":true}`   | silently ignored -- `value` is not read |
 
-⚠ That table describes the **keepalive-timeout** path only. `displayInSleep`
-does not blank everything: with it enabled, a `power {"event":"lock-screen"}`
-still rolls the standby clip, while `power {"event":"shutdown"}` goes fully
-black. The two paths are separate.
+This tool passes the value straight through, so it matches the vendor's own
+toggle. ⚠ An earlier version of this table said the opposite, and that error
+survived a long time: it was "verified" by sampling the panel's mean luminance
+over `screencap`, which is the one measurement this device breaks. **Taking a
+`screencap` wakes the panel**, so the reading reflects the wake, not the
+setting. Confirmed the right way round by watching the panel through a full
+undisturbed timeout, in both directions.
 
-So the payload field is `enable`; `value` is not read. Note the endpoint
-returns `200` with an empty body for *any* payload, including a nonsense
-endpoint name, so the reply proves nothing -- only the panel does.
+⚠ `power {"event":"shutdown"}` does **not** blank the panel either, with or
+without this setting -- it shows the standby clip, exactly like `lock-screen`.
+The only immediate blank is `reed-tpse screen off`
+(`waterBlockScreen {"enable":false}`).
 
-⚠ Taking a `screencap` wakes the panel out of the black state for a few
-seconds. If you are measuring this, sample once after a long undisturbed wait
-rather than polling, or the wake-ups look like the setting not working.
+The endpoint returns `200` with an empty body for *any* payload, including a
+nonsense endpoint name, so the reply proves nothing -- only the panel does.
 
 The setting lives in controller RAM and is lost whenever USB power drops (which
 it does at S5), so `sleep-display` persists it to the state file and the daemon

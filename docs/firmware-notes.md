@@ -249,14 +249,45 @@ KANALI uses it to tell the cooler what the host is doing. Verified on firmware
 V1.0.11 (`--onDoPower--<event>` then `--showStandby--` / `hindStandby` in the
 device log):
 
-| Event | With `sleep-display on` | Effect |
-|---|---|---|
-| `lock-screen` | plays the standby clip | panel leaves the media |
-| `shutdown` | **full black** | panel blanks |
-| `unlock-screen` | -- | hides standby, restores the media |
+| Event | Effect |
+|---|---|
+| `lock-screen` | panel leaves the media for the standby clip |
+| `shutdown` | same -- standby clip |
+| `suspend` | same -- standby clip |
+| `unlock-screen` / `resume` | hides standby, restores the media |
 
-So `shutdown` and `lock-screen` are not the same despite both logging
-`--showStandby--`: only `shutdown` blanks completely.
+⚠ **`shutdown` does not blank the panel.** This table used to claim it did,
+"with `sleep-display on`", and that a black screen was what distinguished it
+from `lock-screen`. Retested end to end -- `displayInSleep` applied fresh and
+confirmed on the wire, then `shutdown` sent -- and the panel ran the standby
+clip, exactly like `lock-screen`. All three events log `--showStandby--` and
+all three do the same thing.
+
+Two ways to actually get a black panel:
+
+- `waterBlockScreen {"enable":false}` (`reed-tpse screen off`) blanks it
+  immediately and unconditionally.
+- `displayInSleep` set to **false**, then let the ~60s disconnect timeout
+  expire. See below -- the field reads backwards.
+
+### `displayInSleep` reads backwards
+
+It is the device's own "display something while the host is asleep", not
+"blank the display":
+
+| `displayInSleep` | after the host stops handshaking |
+|---|---|
+| `true` | the firmware's standby animation |
+| `false` | black |
+
+Measured both ways through a full disconnect timeout. It was documented as the
+inverse for months, which is why a tool setting it to `true` in order to get a
+black panel produced the animation instead. `reed-tpse sleep-display` passes
+the value straight through, matching the vendor's own toggle: `on` gives the
+animation, `off` gives black.
+
+Either way the switch takes about 60s -- the device waits out its own
+disconnect timeout (`--onDisConnect--`) before changing what it shows.
 
 ⚠ **Standby is sticky.** Once `shutdown`, `lock-screen` or `suspend` has put
 the panel there, only `unlock-screen` or `resume` takes it off. Re-sending
