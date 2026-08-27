@@ -1785,6 +1785,13 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
               << "s; applying anyway\n";
   };
 
+  // Everything below is deliberately best-effort: the individual sends are not
+  // checked, because a per-command reply is not a reliable health signal here.
+  // Replies cannot be correlated to requests (AckNumber is the device's own
+  // counter, not an echo), and some commands are answered inconsistently. What
+  // does tell us the link is broken is the handshake, and the loop below
+  // reconnects on that. Checking each send would add branches that could only
+  // repeat what the next handshake already reports.
   auto restore = [&](reed::Device& dev) {
     if (!dev.handshake()) return false;
     wait_for_ui(45);

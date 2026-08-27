@@ -189,6 +189,16 @@ std::optional<Response> parse_response(const std::vector<uint8_t>& data) {
     // Extract version and status from first line
     std::istringstream iss(first_line);
     iss >> response.version >> response.status;
+
+    // AckNumber echoes the SeqNumber of the request being answered.
+    const size_t ack_at = header_part.find("AckNumber=");
+    if (ack_at != std::string::npos) {
+      try {
+        response.ack = std::stoi(header_part.substr(ack_at + 10));
+      } catch (const std::exception&) {
+        // Malformed: leave unset rather than guessing at a correlation.
+      }
+    }
   }
 
   return response;

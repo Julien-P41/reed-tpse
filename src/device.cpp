@@ -334,9 +334,18 @@ std::optional<Response> Device::send_command(const std::string& request_state,
     return std::nullopt;
   }
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-  auto response = read_response(1000);
+  // No sleep before reading. There used to be a flat 500ms wait here, which
+  // cost every command half a second whatever the device did -- read_response
+  // already blocks until a whole frame arrives or the timeout expires.
+  //
+  // Replies are matched by ORDER, not by sequence number, and that is forced:
+  // AckNumber is the device's own counter, not an echo of the SeqNumber sent.
+  // Measured -- SeqNumber=1 out, AckNumber=2 back, on a fresh connection. In
+  // captured vendor traffic the two track each other, which reads like an
+  // echo and is not one. Callers that care call drain() first to clear frames
+  // already in flight.
+  constexpr int kReplyTimeoutMs = 1000;
+  std::vector<uint8_t> response = read_response(kReplyTimeoutMs);
 
   if (response.empty()) {
     if (verbose_) {

@@ -18,6 +18,13 @@ struct Response {
   std::optional<picojson::value> json;
   std::string version;
   std::string status;
+  // The device's AckNumber, if present.
+  //
+  // ⚠ Not usable for correlating a reply with a request. It looks like an echo
+  // of the SeqNumber sent -- it tracks it in captured vendor traffic -- but it
+  // is the device's own counter: SeqNumber=1 out, AckNumber=2 back on a fresh
+  // connection. Exposed for diagnostics, not for matching.
+  std::optional<int> ack;
 };
 
 // Calculate CRC (sum of all bytes & 0xFF)
