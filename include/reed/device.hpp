@@ -205,10 +205,22 @@ class Device {
                                     const std::string& gpu_name);
   std::optional<Response> set_temperature_unit(const std::string& unit);
 
-  // Sleep-mode behaviour. Enabled, the panel goes black once the host stops
-  // handshaking (PC off, or the controlling process exits) instead of falling
-  // back to the firmware's demo loop. Verified on firmware V1.0.11; the field
-  // is `enable` and a `value` field is silently ignored.
+  // What the panel shows once the host stops handshaking -- PC off, or the
+  // controlling process exited. The device waits out its own ~60s disconnect
+  // timeout before switching.
+  //
+  // The name reads backwards: this is the device's "display something while
+  // the host is asleep", not "blank the display".
+  //
+  //   enable=true   the firmware's standby animation
+  //   enable=false  black
+  //
+  // Confirmed both ways on firmware V1.0.11 by watching the panel through a
+  // full undisturbed timeout. It was documented as the inverse for months,
+  // "verified" by sampling luminance over `adb screencap` -- which wakes this
+  // panel, so the reading described the wake rather than the setting.
+  //
+  // The field is `enable`; a `value` field is silently ignored.
   std::optional<Response> set_display_in_sleep(bool enable);
 
   // Tell the device what the host is doing. The field is `event`, not a
@@ -237,9 +249,10 @@ class Device {
   std::optional<Response> reset_fan_profile();
 
   // Set the LCD fan to a fixed duty. `tier` is the vendor's tier name and
-  // `duty` a percentage. VERIFIED on firmware V1.0.11: 25 -> 1530 RPM,
-  // 50 -> 2640, 75 -> 3510, 100 -> 4170; the firmware's own default sits
-  // around 35% (2040 RPM).
+  // `duty` a percentage. Measured RPM per duty is in the README's Fan section;
+  // it is not repeated here, because two copies of a measurement table drift
+  // and neither says which is current. In short: monotonic, not linear, and
+  // roughly 1500-4200 RPM across the range on firmware V1.0.11.
   //
   // Both fan calls send the vendor's exact payload: {mode, smartMode,
   // fixedMode} and nothing else. KANALI never sends the `speed` field even

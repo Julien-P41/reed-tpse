@@ -159,7 +159,6 @@ std::optional<Config> ConfigManager::load_config(LoadStatus* status) {
 
   Config config;
   config.port = get_string(json, "port", config.port);
-  config.brightness = get_int(json, "brightness", config.brightness);
   config.keepalive_interval = get_int(json, "keepalive_interval", config.keepalive_interval);
   config.power_auto = get_bool(json, "power_auto", config.power_auto);
   {
@@ -178,7 +177,6 @@ bool ConfigManager::save_config(const Config& config) {
 
   picojson::object obj;
   obj["port"] = picojson::value(config.port);
-  obj["brightness"] = picojson::value(static_cast<double>(config.brightness));
   obj["keepalive_interval"] =
       picojson::value(static_cast<double>(config.keepalive_interval));
   obj["power_auto"] = picojson::value(config.power_auto);

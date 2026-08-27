@@ -8,7 +8,11 @@ namespace reed {
 
 struct Config {
   std::string port;  // Empty = auto-detect
-  int brightness = 75;  //default lower than max setting to reduce burn-in risk on display
+  // No brightness here. It lived in config.json and looked authoritative, but
+  // nothing honoured it: it seeded a CLI default that was then gated away by
+  // `--brightness` being given or not, so the value that reached the device
+  // was always either the flag or DisplayState::brightness. A dead knob in a
+  // config file is worse than no knob.
   int keepalive_interval = 10;
   // Have the daemon mirror the host's power state to the device: lock/unlock
   // as the session locks, and `shutdown` when the daemon is stopped. Opt-in,

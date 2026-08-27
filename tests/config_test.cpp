@@ -128,7 +128,6 @@ int main() {
   ::setenv("XDG_CONFIG_HOME", tmp.c_str(), 1);
   Config c;
   c.port = "/dev/tryx-panorama";
-  c.brightness = 55;
   c.keepalive_interval = 12;
   c.power_auto = true;
   c.lock_media = "sunset.mp4";
@@ -136,7 +135,6 @@ int main() {
   check("save_config succeeds", ConfigManager::save_config(c));
   auto rc = ConfigManager::load_config();
   check("port", rc && rc->port == c.port);
-  check("brightness", rc && rc->brightness == c.brightness);
   check("keepalive_interval", rc && rc->keepalive_interval == c.keepalive_interval);
   check("power_auto", rc && rc->power_auto == c.power_auto);
   check("lock_media", rc && rc->lock_media == c.lock_media);

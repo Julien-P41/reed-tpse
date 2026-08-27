@@ -751,18 +751,30 @@ alongside the media state, so it survives reboots.
 
 ## Configuration
 
-Config: `~/.config/reed-tpse/config.json`
+Two files, with different jobs.
+
+**`~/.config/reed-tpse/config.json`** -- things you set once:
 
 ```json
-{"brightness":100,"keepalive_interval":10}
+{"keepalive_interval":10, "power_auto":true,
+ "lock_media":"lockscreen.mp4", "lock_brightness":30}
 ```
 
-Port is auto-detected by default. To pin a specific port:
-```json
-{"port":"/dev/ttyACM1","brightness":100,"keepalive_interval":10}
-```
+| key | |
+|---|---|
+| `port` | pin a serial port; omit to auto-detect |
+| `keepalive_interval` | seconds between daemon handshakes (1-55, default 10) |
+| `power_auto` | mirror host power/lock state to the device |
+| `lock_media` / `lock_brightness` | what to show while the session is locked |
 
-Display state (for daemon): `~/.local/state/reed-tpse/display.json`
+⚠ There is no `brightness` key. There used to be, and it did nothing -- the
+value that reached the device was always either `--brightness` or the stored
+display state. If your config still has one, it is ignored and can be deleted.
+
+**`~/.local/state/reed-tpse/display.json`** -- what the daemon re-applies on
+every connect: media, brightness, ratio, play mode, screen mode, filter, fan
+tier and the HUD. Written by the commands, not meant to be hand-edited, though
+nothing stops you.
 
 ## Architecture
 

@@ -80,7 +80,6 @@ static void print_usage(const char* prog) {
          "  -v, --verbose           Verbose output\n"
          "  --ratio <2:1|1:1>       Display ratio (default: 2:1)\n"
          "  --brightness <0-100>    Set brightness with display command\n"
-         "  --keepalive             Stay running with keepalive (default: exit)\n"
          "  --foreground            Run daemon in foreground\n"
          "  --json                  Machine-readable output (status)\n"
          "  --watch <seconds>       Poll until interrupted (status)\n"
@@ -1458,8 +1457,7 @@ static int cmd_display(const std::string& port,
                        const std::vector<std::string>& files,
                        const std::string& ratio, int brightness,
                        bool brightness_given, const std::string& play_mode,
-                       bool split, bool keepalive, int keepalive_interval,
-                       bool verbose) {
+                       bool split, bool verbose) {
   if (brightness < 0 || brightness > 100) {
     std::cerr << "Brightness must be 0-100\n";
     return 1;
@@ -1536,16 +1534,10 @@ static int cmd_display(const std::string& port,
   state->preset.reset();  // custom media and a preset are mutually exclusive
   reed::ConfigManager::save_state(*state);
 
-  // Check for the daemon before opening the port, not after: connect() prints
-  // its own "already open by PID ..." diagnostic, which is noise when handing
-  // over to the daemon is the expected path rather than a failure.
-  if (auto holder =
-          reed::find_port_holder(port.empty() ? "/dev/ttyACM0" : port);
-      holder && holder->comm.find("reed-tpse") != std::string::npos) {
-    std::cout << "Saved. The daemon holds the port and applies it within a "
-                 "second.\n";
-    return 0;
-  }
+  // Checked before the port is opened: connect() prints its own "already open
+  // by PID ..." diagnostic, which is noise when handing over to the daemon is
+  // the expected path rather than a failure.
+  if (daemon_holds_port(port)) return defer_to_daemon("Display");
 
   reed::Device device(port, verbose);
   if (!device.connect()) {
@@ -1573,26 +1565,14 @@ static int cmd_display(const std::string& port,
   // Brightness is its own setting. Changing what is on screen should not
   // silently reset it to the config default -- that quietly undid any
   // `reed-tpse brightness N` the moment the media changed.
-  if (!keepalive) {
-    std::cout << "Run 'reed-tpse daemon start' to keep display persistent.\n";
-    return 0;
-  }
-
-  std::cout << "Keeping connection alive (Ctrl+C to exit)...\n";
-
-  std::signal(SIGINT, signal_handler);
-  std::signal(SIGTERM, signal_handler);
-
-  while (g_running) {
-    std::this_thread::sleep_for(std::chrono::seconds(keepalive_interval));
-    if (!g_running) break;
-    device.handshake();
-    if (verbose) {
-      std::cout << "  keepalive sent\n";
-    }
-  }
-
-  std::cout << "Stopping.\n";
+  // No keepalive loop here. `display` used to be able to hold the connection
+  // itself, which was a second, subtly different implementation of what the
+  // daemon does -- and a `display --keepalive` left running in another
+  // terminal held the port against everything else while looking like an
+  // ordinary finished command.
+  std::cout << "Run 'reed-tpse daemon start' to keep the display persistent -- "
+               "the device\n reverts to its standby content about 60s after "
+               "the last handshake.\n";
   return 0;
 }
 
@@ -1676,15 +1656,15 @@ static std::string systemctl(bool system_scope) {
 // First run has no saved state. Rather than refuse, seed the playlist from
 // whatever media is already on the device. Idea taken from
 // xiaotinglian/reed-tpse (bootstrap_display_state).
-static std::optional<reed::DisplayState> bootstrap_display_state(
-    int brightness) {
+static std::optional<reed::DisplayState> bootstrap_display_state() {
   if (!reed::Adb::is_device_connected()) return std::nullopt;
   auto media = reed::Adb::list_media();
   if (!media || media->empty()) return std::nullopt;
 
+  // Brightness is left at DisplayState's own default -- there is no
+  // config-level brightness to seed it from any more.
   reed::DisplayState state;
   state.media = *media;
-  state.brightness = brightness;
   reed::ConfigManager::save_state(state);
   return state;
 }
@@ -1725,7 +1705,7 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     return 1;
   }
   if (!state) {
-    state = bootstrap_display_state(config ? config->brightness : 75);
+    state = bootstrap_display_state();
   }
   if (!state) {
     // Still nothing: carry on anyway. Exiting non-zero here put the unit into a
@@ -2406,8 +2386,9 @@ int main(int argc, char* argv[]) {
   std::string play_mode;  // empty = keep whatever is saved
   int filter_opacity = 100;
   bool opacity_given = false;
-  int brightness = config.brightness;
-  bool keepalive = false;
+  // Only read when --brightness is given, so the initial value never reaches
+  // the device; DisplayState::brightness is the stored setting.
+  int brightness = 0;
   bool foreground = false;
   bool json_output = false;
   bool brightness_given = false;
@@ -2479,8 +2460,6 @@ int main(int argc, char* argv[]) {
         brightness = std::atoi(argv[i]);
         brightness_given = true;
       }
-    } else if (arg == "--keepalive") {
-      keepalive = true;
     } else if (arg == "--foreground") {
       foreground = true;
     } else if (arg == "--json") {
@@ -2596,8 +2575,7 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return cmd_display(port, args, ratio, brightness, brightness_given,
-                       play_mode, split, keepalive, keepalive_interval,
-                       verbose);
+                       play_mode, split, verbose);
   } else if (command == "brightness") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse brightness <0-100>\n";
