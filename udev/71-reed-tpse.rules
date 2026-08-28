@@ -24,9 +24,22 @@
 #   ~/.config/reed-tpse/config.json  ->  {"port": "/dev/tryx-panorama"}
 
 # CDC-ACM serial interface — display, brightness, fan, status
+# ID_MM_DEVICE_IGNORE keeps ModemManager off this port. It runs as root, so
+# TIOCEXCL does not stop it, and udev marks the cooler ID_MM_CANDIDATE=1
+# because its CDC-ACM descriptor (020201) is what a modem's control port looks
+# like. If it probed, it would hold the port for seconds and write AT commands
+# into a device that speaks a 0x5A-framed JSON protocol -- during exactly the
+# windows where the port is briefly free: after a `rotate` reboot, after
+# suspend/resume, and at boot.
+#
+# It has never been observed doing so here: `mmcli -L` reports no modems and
+# seven days of its journal mention neither ttyACM0 nor 18d1/2d03. Most likely
+# its plugin filtering skips the device because it also exposes an ADB
+# interface (ff4201). This line is cheap insurance against a hazard that has
+# not fired, not a fix for an observed fault.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d03", \
     ATTRS{product}=="cm01*", TAG+="uaccess", GROUP="dialout", MODE="0660", \
-    SYMLINK+="tryx-panorama"
+    ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="tryx-panorama"
 
 # USB device node — adb media transfer
 SUBSYSTEM=="usb", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d03", \
