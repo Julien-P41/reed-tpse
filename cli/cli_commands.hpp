@@ -42,3 +42,8 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
 int cmd_fan(const std::string& port, bool reset, const std::string& tier_arg,
             int duty_arg, bool smart, const std::string& profile_path,
             bool force, bool verbose);
+
+int cmd_daemon_start(const std::string& port, bool foreground,
+                     bool system_scope, bool verbose);
+int cmd_daemon_stop(bool system_scope);
+int cmd_daemon_status(bool system_scope);
