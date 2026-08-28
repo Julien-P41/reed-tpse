@@ -40,3 +40,15 @@ std::optional<reed::DisplayState> load_state_for_update();
 // justifies telling the user their change will be applied.
 bool daemon_holds_port(const std::string& port);
 int defer_to_daemon(const std::string& what);
+
+// A named LCD-fan tier: the vendor pairs a fixed duty with a specific curve,
+// so a tier is the pair rather than just a percentage. Shared because the
+// daemon re-applies the saved tier on every connect, and looks it up by the
+// wire name stored in the state file.
+struct FanTier {
+  const char* alias;
+  const char* wire;
+  int duty;
+  reed::FanCurve curve;
+};
+const FanTier* lookup_fan_tier(const std::string& in);

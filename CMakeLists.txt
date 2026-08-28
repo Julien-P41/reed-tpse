@@ -31,6 +31,8 @@ add_executable(reed-tpse
     cli/cli_common.cpp
     cli/cmd_device.cpp
     cli/cmd_media.cpp
+    cli/cmd_hud.cpp
+    cli/cmd_fan.cpp
 )
 target_link_libraries(reed-tpse PRIVATE reed)
 
