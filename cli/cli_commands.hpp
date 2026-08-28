@@ -21,3 +21,18 @@ int cmd_screen(const std::string& port, const std::string& arg, bool verbose);
 int cmd_sleep_display(const std::string& port, const std::string& arg,
                       bool verbose);
 int cmd_power(const std::string& port, const std::string& arg, bool verbose);
+
+int cmd_filter(const std::string& port, const std::string& name, int opacity,
+               bool opacity_given, bool verbose);
+int cmd_preset(const std::string& port, const std::vector<std::string>& args,
+               bool verbose);
+int cmd_upload(const std::string& file, bool verbose);
+int cmd_display(const std::string& port, const std::vector<std::string>& files,
+                const std::string& ratio, int brightness, bool brightness_given,
+                const std::string& play_mode, bool split, bool verbose);
+int cmd_brightness(const std::string& port, int value, bool verbose);
+int cmd_list();
+int cmd_delete(const std::vector<std::string>& files);
+int cmd_lock_display(const std::string& port,
+                     const std::vector<std::string>& args, int brightness,
+                     bool brightness_given, bool verbose);
