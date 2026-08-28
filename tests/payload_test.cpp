@@ -12,6 +12,7 @@
 // Comparison is structural: both sides are parsed and re-serialised, so key
 // order and float formatting do not matter, only content.
 #include "reed/device.hpp"
+#include "reed/mapping.hpp"
 #include "reed/picojson.h"
 
 #include <cstdio>
@@ -36,6 +37,11 @@ static void same(const std::string& what, const std::string& got,
     ++failures;
     std::cout << "    ours:   " << a << "\n    vendor: " << b << "\n";
   }
+}
+
+static void check(const std::string& what, bool ok) {
+  std::printf("  %-46s %s\n", what.c_str(), ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
 }
 
 int main() {
@@ -163,6 +169,70 @@ int main() {
     std::printf("  %-46s %s\n", "rotate appears only when set",
                 present ? "ok" : "FAIL");
     if (!present) ++failures;
+  }
+
+  // The mapping from saved state to a payload. This is where the bugs that
+  // reached the panel actually came from -- the serialisers above were never
+  // the problem. Covered end to end: state in, wire bytes out.
+  std::puts("saved state -> payload:");
+  {
+    reed::DisplayState st;
+    st.media = {"clip.mp4"};
+    st.brightness = 40;
+    st.filter = "Smoke";
+    st.filter_opacity = 60;
+    st.hud.enabled = true;
+    st.hud.metrics = {"CPU Temperature"};
+    st.hud.align = "Right";
+    st.hud.color = "00FF00";
+    same("full screen with a HUD and a filter",
+         reed::payload::screen_config(reed::screen_config_from(st)),
+         R"({"id":"Customization","screenMode":"Full Screen",)"
+         R"("playMode":"Single","ratio":"2:1","media":["clip.mp4"],)"
+         R"("settings":{"color":"#00FF00","align":"Right",)"
+         R"("filter":{"value":"Smoke","opacity":60},"badges":[]},)"
+         R"("sysinfoDisplay":["CPU Temperature"]})");
+
+    // The filter belongs to the media, so it survives the HUD being off --
+    // while the metrics do not.
+    st.hud.enabled = false;
+    const reed::ScreenConfig no_hud = reed::screen_config_from(st);
+    check("filter survives a disabled HUD", no_hud.settings.filter == "Smoke");
+    check("metrics dropped with the HUD", no_hud.sysinfo_display.empty());
+  }
+
+  std::puts("saved state -> split payload:");
+  {
+    reed::DisplayState st;
+    st.media = {"left.png", "right.png"};
+    st.screen_mode = "Screen Splitting";
+    st.hud.enabled = true;
+    st.hud.metrics = {"CPU Temperature"};
+    st.hud.color = "00FF00";
+    st.hud.align = "Left";
+
+    // No right-zone config: the right zone mirrors the left.
+    reed::ScreenConfig mirrored = reed::screen_config_from(st);
+    check("split detected from the saved mode", mirrored.split);
+    check("right zone mirrors the left",
+          mirrored.split_settings_right.color == "00FF00" &&
+              mirrored.split_settings_right.align == "Left");
+
+    // With one, the zones diverge. This is the case that shipped a blank zone
+    // when the mapping existed as copies: one copy assigned the right zone
+    // before its source was populated.
+    reed::HudConfig right;
+    right.enabled = true;
+    right.metrics = {"GPU Temperature"};
+    right.color = "FF0000";
+    right.align = "Right";
+    st.hud_right = right;
+    const reed::ScreenConfig split = reed::screen_config_from(st);
+    check("right zone takes its own colour",
+          split.split_settings_right.color == "FF0000");
+    check("right zone takes its own metrics",
+          split.split_sysinfo_right == std::vector<std::string>{"GPU Temperature"});
+    check("left zone unaffected", split.settings.color == "00FF00");
   }
 
   std::printf("%s\n", failures ? "FAILURES" : "all checks passed");
