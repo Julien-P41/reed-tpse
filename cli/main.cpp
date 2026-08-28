@@ -19,6 +19,7 @@
 #include "reed/config.hpp"
 #include "reed/device.hpp"
 #include "reed/mapping.hpp"
+#include "reed/wire.hpp"
 #include "reed/media.hpp"
 #include "reed/sysinfo.hpp"
 
@@ -1045,7 +1046,7 @@ static int cmd_preset(const std::string& port, const std::vector<std::string>& a
   // The leading number is not used by the firmware -- it splits on ": " and
   // keeps the name -- but the prefix must be present or the command is not
   // dispatched at all.
-  const std::string id = "Pre-set 1: " + match;
+  const std::string id = reed::wire::kPresetPrefix + match;
 
   // Carry the stored overlay styling and metrics with the preset, the way the
   // vendor does -- otherwise selecting a preset silently drops the HUD.
@@ -1484,7 +1485,7 @@ static int cmd_display(const std::string& port,
   // Without this the struct default ("Single") went out on every call, so a
   // multi-file `display` only ever showed the first file.
   if (!play_mode.empty()) state->play_mode = play_mode;
-  if (split) state->screen_mode = "Screen Splitting";
+  if (split) state->screen_mode = reed::wire::kScreenSplitting;
   const reed::ScreenConfig config = screen_config_from(*state);
 
   const int effective_brightness =
@@ -1779,7 +1780,7 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     if (state->fan_tier) {
       const FanTier* t = lookup_fan_tier(*state->fan_tier);
       if (t) full.fan_curve = t->curve;
-      full.fan_mode = state->fan_duty ? "Fixed Mode" : "Smart Mode";
+      full.fan_mode = state->fan_duty ? reed::wire::kFanFixed : reed::wire::kFanSmart;
       full.fan_fixed = state->fan_duty ? *state->fan_duty : (t ? t->duty : 40);
     }
     // `rotate` is left unset on purpose -- see FullConfig::rotate.
@@ -1821,7 +1822,7 @@ static int cmd_daemon_start(const std::string& port, bool foreground,
     // A preset, because the `id` block inside `config` is built for custom
     // media.
     if (state->preset) {
-      dev.set_preset("Pre-set 1: " + *state->preset, screen_config.settings,
+      dev.set_preset(reed::wire::kPresetPrefix + *state->preset, screen_config.settings,
                      screen_config.sysinfo_display);
     }
     // And a split screen. The device parses the two-zone form inside `config`

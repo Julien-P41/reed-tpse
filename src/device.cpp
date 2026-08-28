@@ -1,4 +1,5 @@
 #include "reed/device.hpp"
+#include "reed/wire.hpp"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -487,8 +488,8 @@ picojson::object screen_object(const ScreenConfig& config) {
 
   picojson::object out;
   // No "Type" key: that was ours. KANALI sends `id` alone to pick between
-  // custom media ("Customization") and a preset ("Pre-set N: Name").
-  out["id"] = picojson::value("Customization");
+  // custom media (wire::kCustomization) and a preset ("Pre-set N: Name").
+  out["id"] = picojson::value(wire::kCustomization);
   out["screenMode"] = picojson::value(config.screen_mode);
   out["playMode"] = picojson::value(config.play_mode);
   out["media"] = picojson::value(media_arr);
@@ -798,13 +799,13 @@ const FanCurve kDefaultCurve = {{0, 10},  {10, 20}, {30, 30},  {50, 40},
 
 std::optional<Response> Device::set_fan_fixed(int duty, const FanCurve& curve) {
   return set_fan_profile(payload::fan(
-      "Fixed Mode", curve.empty() ? payload::kDefaultCurve : curve, duty));
+      wire::kFanFixed, curve.empty() ? payload::kDefaultCurve : curve, duty));
 }
 
 std::optional<Response> Device::set_fan_smart(const FanCurve& curve,
                                               int fixed_duty) {
   return set_fan_profile(payload::fan(
-      "Smart Mode", curve.empty() ? payload::kDefaultCurve : curve,
+      wire::kFanSmart, curve.empty() ? payload::kDefaultCurve : curve,
       fixed_duty));
 }
 

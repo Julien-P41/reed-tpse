@@ -1,5 +1,7 @@
 #include "reed/mapping.hpp"
 
+#include "reed/wire.hpp"
+
 namespace reed {
 
 DisplaySettings settings_from(const HudConfig& hud, const std::string& filter,
@@ -25,7 +27,7 @@ ScreenConfig screen_config_from(const DisplayState& state) {
   cfg.settings = settings_from(state.hud, state.filter, state.filter_opacity);
   if (state.hud.enabled) cfg.sysinfo_display = state.hud.metrics;
 
-  if (cfg.screen_mode == "Screen Splitting") {
+  if (cfg.screen_mode == wire::kScreenSplitting) {
     cfg.split = true;
     // The right zone mirrors the left unless it has its own configuration.
     cfg.split_settings_right = cfg.settings;
