@@ -170,21 +170,48 @@ Device::~Device() {
 }
 
 bool Device::connect() {
-  fd_ = open(port_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+  // O_CLOEXEC is load-bearing. Without it every fork/exec in this program --
+  // the adb calls, loginctl, nvidia-smi, ffmpeg -- inherits the serial fd.
+  // Most children exit promptly and the copy dies with them, but adb's
+  // fork-server does not: it is spawned by the daemon's own readiness probe,
+  // inherits the descriptor, and outlives everything. The tty's exclusive flag
+  // is cleared only when the last reference goes away, so from that moment the
+  // daemon cannot reopen its own port -- permanently, not until some window
+  // reopens. Observed: adb holding fd 3 on /dev/ttyACM0 while the daemon that
+  // spawned it held none, and 147 consecutive EBUSY reconnect attempts.
+  fd_ = open(port_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (fd_ < 0) {
     // EBUSY means another instance holds the port exclusively (see TIOCEXCL
     // below). Two readers on one tty split incoming frames between them at
     // random, so name the holder rather than failing with a bare errno.
     if (errno == EBUSY) {
+      // Name the holder AND give a remedy that matches it. This printed the
+      // reed-tpse remedies unconditionally, so a user whose port was held by
+      // adb was told to stop the daemon -- which changed nothing, and pointed
+      // away from the one command that would have helped.
+      const auto holders = find_port_holders(port_);
+      const auto adb = std::find_if(
+          holders.begin(), holders.end(),
+          [](const PortHolder& h) { return h.comm.find("adb") == 0; });
+
       std::cerr << "Error: " << port_ << " is already open";
-      if (auto holder = find_port_holder(port_)) {
-        std::cerr << " by PID " << holder->pid << " (" << holder->comm << ")";
+      if (!holders.empty()) {
+        std::cerr << " by PID " << holders.front().pid << " ("
+                  << holders.front().comm << ")";
       }
-      std::cerr << ".\n"
-                << "       Only one instance may hold the device. Stop it "
-                   "with one of:\n"
-                << "         systemctl --user stop reed-tpse.service\n"
-                << "         sudo systemctl stop reed-tpse.service\n";
+      std::cerr << ".\n";
+
+      if (adb != holders.end()) {
+        std::cerr << "       adb is holding it. Release it with:\n"
+                  << "         adb kill-server\n"
+                  << "       This does not disturb the cooler; adb restarts "
+                     "on its next use.\n";
+      } else {
+        std::cerr << "       Only one instance may hold the device. Stop it "
+                     "with one of:\n"
+                  << "         systemctl --user stop reed-tpse.service\n"
+                  << "         sudo systemctl stop reed-tpse.service\n";
+      }
     } else if (verbose_) {
       std::cerr << "Failed to open " << port_ << ": " << strerror(errno)
                 << "\n";
