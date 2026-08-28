@@ -182,6 +182,21 @@ every live measurement in this document.
 leaves the panel **90° out**, which is indistinguishable at a glance from
 waterfall mode.
 
+⚠ `rotate` needs the serial port for itself and cannot hand over to the daemon.
+It is an event with nothing to store, so there is nothing for the daemon to
+re-apply on its behalf. Stop the daemon, rotate, start it again:
+
+```bash
+sudo systemctl stop reed-tpse.service
+reed-tpse rotate mirror
+# ~20s for the cooler to come back
+sudo systemctl start reed-tpse.service
+```
+
+Verified end to end: the daemon reconnects and restores the media, brightness
+and everything else by itself once it is started again -- nothing needs
+re-applying by hand.
+
 `screenFlip` is not a device endpoint at all; the vendor app implements it by
 mapping a boolean onto `rotate`'s `degree`, so it is inert here for the same
 reason.
