@@ -53,13 +53,14 @@ bool DeviceStatus::healthy() const {
   return true;
 }
 
-std::optional<PortHolder> find_port_holder(const std::string& port) {
+std::vector<PortHolder> find_port_holders(const std::string& port) {
   namespace fs = std::filesystem;
 
   std::error_code ec;
   fs::path target = fs::canonical(port, ec);
   if (ec) target = port;
 
+  std::vector<PortHolder> holders;
   const int self = getpid();
 
   for (const auto& proc : fs::directory_iterator("/proc", ec)) {
@@ -90,11 +91,18 @@ std::optional<PortHolder> find_port_holder(const std::string& port) {
       if (comm) std::getline(comm, holder.comm);
       if (holder.comm.empty()) holder.comm = "unknown";
 
-      return holder;
+      holders.push_back(holder);
+      break;  // one entry per process, however many fds it has
     }
   }
 
-  return std::nullopt;
+  return holders;
+}
+
+std::optional<PortHolder> find_port_holder(const std::string& port) {
+  auto holders = find_port_holders(port);
+  if (holders.empty()) return std::nullopt;
+  return holders.front();
 }
 
 std::optional<std::string> Device::find_device(bool verbose) {

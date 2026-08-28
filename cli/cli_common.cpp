@@ -99,22 +99,27 @@ std::optional<reed::DisplayState> load_state_for_update() {
 }
 
 bool daemon_holds_port(const std::string& port) {
-  auto holder = reed::find_port_holder(port.empty() ? "/dev/ttyACM0" : port);
-  if (!holder || holder->comm.find("reed-tpse") == std::string::npos) {
-    return false;
-  }
+  // Every holder, not the first one found. adb's fork-server keeps the CDC
+  // device open alongside the daemon, and /proc is walked in whatever order
+  // readdir gives -- so asking for a single holder made this answer depend on
+  // directory order, and a command would defer or fail arbitrarily between
+  // runs on an unchanged system.
+  for (const auto& holder :
+       reed::find_port_holders(port.empty() ? "/dev/ttyACM0" : port)) {
+    if (holder.comm.find("reed-tpse") == std::string::npos) continue;
 
-  // Matching the process name alone is not enough: `display --keepalive` left
-  // running in another terminal is also a reed-tpse holding the port, and it
-  // will never apply a saved state. Telling the user "the daemon will do it"
-  // in that case is a lie that looks like success. Check the argv.
-  std::ifstream cmdline("/proc/" + std::to_string(holder->pid) + "/cmdline",
-                        std::ios::binary);
-  if (!cmdline) return false;
-  std::string argv((std::istreambuf_iterator<char>(cmdline)),
-                   std::istreambuf_iterator<char>());
-  std::replace(argv.begin(), argv.end(), '\0', ' ');
-  return argv.find(" daemon ") != std::string::npos;
+    // The name alone is not enough: any reed-tpse invocation could be holding
+    // the port, and only a daemon will apply a saved state. Telling the user
+    // "the daemon will do it" otherwise is a lie that looks like success.
+    std::ifstream cmdline("/proc/" + std::to_string(holder.pid) + "/cmdline",
+                          std::ios::binary);
+    if (!cmdline) continue;
+    std::string argv((std::istreambuf_iterator<char>(cmdline)),
+                     std::istreambuf_iterator<char>());
+    std::replace(argv.begin(), argv.end(), '\0', ' ');
+    if (argv.find(" daemon ") != std::string::npos) return true;
+  }
+  return false;
 }
 
 int defer_to_daemon(const std::string& what) {

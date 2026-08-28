@@ -105,6 +105,14 @@ struct PortHolder {
   std::string comm;
 };
 
+// Every process holding the port, not just one. More than one can: adb's
+// fork-server keeps the CDC device open alongside the daemon, so asking for
+// "the" holder returns whichever /proc happened to be walked first -- an
+// arbitrary answer that changes between runs.
+std::vector<PortHolder> find_port_holders(const std::string& port);
+
+// The first holder found, for diagnostics. Prefer find_port_holders when the
+// answer matters.
 std::optional<PortHolder> find_port_holder(const std::string& port);
 
 // The JSON bodies, separated from the transport that carries them.
