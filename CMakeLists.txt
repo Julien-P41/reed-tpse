@@ -26,7 +26,10 @@ target_compile_options(reed PRIVATE
     $<$<CONFIG:Debug>:-g -O0>
 )
 
-add_executable(reed-tpse cli/main.cpp)
+add_executable(reed-tpse
+    cli/main.cpp
+    cli/cli_common.cpp
+)
 target_link_libraries(reed-tpse PRIVATE reed)
 
 target_compile_options(reed-tpse PRIVATE
