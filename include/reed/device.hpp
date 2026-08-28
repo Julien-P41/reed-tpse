@@ -35,6 +35,12 @@ struct DisplaySettings {
 // KANALI always sends exactly 8 points, first at 0 degC and last at 100/100.
 using FanCurve = std::vector<std::pair<int, int>>;
 
+namespace payload {
+// The vendor's "low" tier, and what its `config` blob ships as the factory
+// default. Declared here so FullConfig can default to it.
+extern const FanCurve kDefaultCurve;
+}  // namespace payload
+
 // Everything `POST config` carries. The vendor sends this immediately after
 // `conn`, on every connect -- one frame instead of the five-plus we used to
 // send, which is what the post-connect race was about.
@@ -49,7 +55,12 @@ struct FullConfig {
   // rotation. Only set this when the user asked for it.
   std::optional<int> rotate;
   std::string fan_mode = "Smart Mode";
-  std::vector<std::pair<int, int>> fan_curve;
+  // Defaults to the vendor curve, not an empty array. The daemon only fills
+  // this in when a fan tier has been configured, so an untouched install used
+  // to send `"smartMode":[]` in every post-connect frame -- a shape no
+  // captured vendor frame has, in the one field this project has repeatedly
+  // been burned by.
+  FanCurve fan_curve = payload::kDefaultCurve;
   int fan_fixed = 40;
   std::string cpu_name;
   std::string gpu_name;

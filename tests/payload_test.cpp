@@ -12,10 +12,13 @@
 // Comparison is structural: both sides are parsed and re-serialised, so key
 // order and float formatting do not matter, only content.
 #include "reed/device.hpp"
+#include "reed/config.hpp"
 #include "reed/mapping.hpp"
 #include "reed/picojson.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -147,6 +150,8 @@ int main() {
     full.brightness = 100;
     full.fan_curve = low;
     full.fan_fixed = 40;
+    // (the golden below assigns the curve explicitly; the default is checked
+    //  separately, further down)
     full.cpu_name = "CPU";
     full.gpu_name = "GPU";
     same("no rotate when unset", reed::payload::full_config(full, screen),
@@ -169,6 +174,24 @@ int main() {
     std::printf("  %-46s %s\n", "rotate appears only when set",
                 present ? "ok" : "FAIL");
     if (!present) ++failures;
+  }
+
+  // An untouched install never sets a fan curve -- the daemon fills it only
+  // when a tier has been configured -- so the default is what most `config`
+  // frames actually carry. It must be the vendor's, not an empty array: no
+  // captured vendor frame has ever carried an empty smartMode, and this is
+  // the field that stopped the fan dead once already.
+  std::puts("config -- an unconfigured fan still gets the vendor curve:");
+  {
+    reed::ScreenConfig screen;
+    screen.media = {"a.mp4"};
+    reed::FullConfig untouched;  // nothing assigned
+    const std::string frame = reed::payload::full_config(untouched, screen);
+    check("smartMode is not empty",
+          frame.find("\"smartMode\":[]") == std::string::npos);
+    check("smartMode is the vendor's 8-point curve",
+          frame.find("[[0,10],[10,20],[30,30],[50,40],[65,55],[80,70],"
+                     "[90,100],[100,100]]") != std::string::npos);
   }
 
   // The mapping from saved state to a payload. This is where the bugs that
@@ -233,6 +256,60 @@ int main() {
     check("right zone takes its own metrics",
           split.split_sysinfo_right == std::vector<std::string>{"GPU Temperature"});
     check("left zone unaffected", split.settings.color == "00FF00");
+  }
+
+  // The seam between the two files above: everything else here builds a
+  // DisplayState in memory, and config_test round-trips a DisplayState without
+  // ever turning one into a payload. Between them, a field could be dropped
+  // from persistence entirely and both suites would stay green -- which is
+  // exactly the "panel is wrong but the logs look right" failure this project
+  // keeps hitting. Save, load, map, serialise, and compare the bytes.
+  std::puts("state file -> payload, through the real save/load:");
+  {
+    const std::filesystem::path tmp =
+        std::filesystem::temp_directory_path() / "reed-payload-seam";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    ::setenv("XDG_STATE_HOME", tmp.c_str(), 1);
+
+    reed::DisplayState st;
+    st.media = {"left.png", "right.png"};
+    st.screen_mode = "Screen Splitting";
+    st.filter = "Rain";
+    st.filter_opacity = 45;
+    st.screen_on = false;
+    st.hud.enabled = true;
+    st.hud.metrics = {"CPU Temperature"};
+    st.hud.color = "00FF00";
+    st.hud.align = "Left";
+    reed::HudConfig right;
+    right.enabled = true;
+    right.metrics = {"GPU Temperature"};
+    right.color = "FF0000";
+    right.align = "Right";
+    st.hud_right = right;
+
+    check("save_state succeeds", reed::ConfigManager::save_state(st));
+    auto loaded = reed::ConfigManager::load_state();
+    check("load_state returns a value", loaded.has_value());
+    if (loaded) {
+      // Everything below travels: media, the split mode, both overlays and
+      // the filter. A field lost in save_state or load_state shows up here as
+      // the user-visible symptom -- the right zone reverting to a copy of the
+      // left, or the filter coming back null.
+      same("payload survives the round trip",
+           reed::payload::screen_config(reed::screen_config_from(*loaded)),
+           R"({"id":"Customization","screenMode":"Screen Splitting",)"
+           R"("playMode":"Single","media":["left.png","right.png"],)"
+           R"("settings":[{"color":"#00FF00","align":"Left",)"
+           R"("filter":{"value":"Rain","opacity":45},"badges":[]},)"
+           R"({"color":"#FF0000","align":"Right",)"
+           R"("filter":{"value":"Rain","opacity":45},"badges":[]}],)"
+           R"("sysinfoDisplay":[["CPU Temperature"],["GPU Temperature"]]})");
+      check("screen_on survives",
+            loaded->screen_on.has_value() && *loaded->screen_on == false);
+    }
+    std::filesystem::remove_all(tmp);
   }
 
   std::printf("%s\n", failures ? "FAILURES" : "all checks passed");

@@ -182,9 +182,13 @@ bool ConfigManager::save_config(const Config& config) {
   obj["power_auto"] = picojson::value(config.power_auto);
   if (config.lock_media) {
     obj["lock_media"] = picojson::value(*config.lock_media);
-    obj["lock_brightness"] =
-        picojson::value(static_cast<double>(config.lock_brightness));
   }
+  // Written whether or not a lock clip is set. Nesting it inside the media
+  // meant `lock-display --remove` silently discarded the chosen brightness,
+  // so re-enabling a clip later came back at the default -- upward, on a panel
+  // this project warns about burn-in for.
+  obj["lock_brightness"] =
+      picojson::value(static_cast<double>(config.lock_brightness));
 
   return write_atomically(get_config_path(),
                           picojson::value(obj).serialize() + "\n");

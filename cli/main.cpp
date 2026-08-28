@@ -15,15 +15,10 @@
 #include <memory>
 #include <thread>
 
-#include "reed/adb.hpp"
 #include "reed/config.hpp"
 #include "reed/device.hpp"
 #include "cli_common.hpp"
 #include "cli_commands.hpp"
-#include "reed/mapping.hpp"
-#include "reed/wire.hpp"
-#include "reed/media.hpp"
-#include "reed/sysinfo.hpp"
 
 #include <set>
 #include <sstream>

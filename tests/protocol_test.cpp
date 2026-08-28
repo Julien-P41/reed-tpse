@@ -42,10 +42,28 @@ int main() {
   auto t = parse_response(two);
   printf("two frames -> first parsed:      %s\n", t ? "yes" : "NO"); fail += !t;
 
-  // round-trip: what we build must parse
-  auto built = build_frame("POST", "brightness", "{\"value\":60}", "1", 7);
-  bool r4 = parse_response(built).has_value();
-  printf("build_frame round-trips:         %s\n", r4 ? "yes" : "NO"); fail += !r4;
+  // Round-trip over a payload containing the frame marker itself. 'Z' is
+  // 0x5A, so a media file called Zelda.mp4 exercises the escaper -- without
+  // an escapable byte in the content, a broken escape() is invisible here and
+  // the frame simply truncates at the embedded marker.
+  //
+  // Comparing the body, not merely that it parsed: has_value() alone passes
+  // on a frame that lost everything after the marker.
+  const std::string content = "{\"media\":[\"Zelda.mp4\"]}";
+  auto built = build_frame("POST", "waterBlockScreenId", content, "1", 7);
+  auto parsed = parse_response(built);
+  bool r4 = parsed && parsed->body == content;
+  printf("round-trips a payload with 0x5A: %s\n", r4 ? "yes" : "NO"); fail += !r4;
+
+  // The request header vocabulary. The host numbers its own frames with
+  // SeqNumber; AckNumber is the device's field, and sending it on a request
+  // is what this once did. The device parses either, so the mistake is silent
+  // -- it shows up only as SeqNumber=-1 in the device's own logging.
+  const std::string frame(built.begin(), built.end());
+  bool r5 = frame.find("SeqNumber=7") != std::string::npos;
+  printf("request carries SeqNumber:       %s\n", r5 ? "yes" : "NO"); fail += !r5;
+  bool r6 = frame.find("AckNumber=") == std::string::npos;
+  printf("request carries no AckNumber:    %s\n", r6 ? "yes" : "NO"); fail += !r6;
 
   printf("%s\n", fail ? "FAILURES" : "all checks passed");
   return fail != 0;

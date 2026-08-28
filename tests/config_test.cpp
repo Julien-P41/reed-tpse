@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <iostream>
 #include <string>
 
@@ -154,6 +156,38 @@ int main() {
   auto rc3 = ConfigManager::load_config();
   check("cleared lock_media stays unset", rc3 && !rc3->lock_media);
   check("power_auto survives the clear", rc3 && rc3->power_auto);
+  check("lock_brightness survives the clear",
+        rc3 && rc3->lock_brightness == 30);
+
+  // Why a load failed, and -- the part that matters -- that a file which
+  // exists but does not parse is left alone. Reporting "missing" for a bad
+  // read is what let a command load defaults and save them over everything
+  // the file held.
+  std::puts("a bad state file is not clobbered:");
+  {
+    const fs::path state_dir = tmp / "reed-tpse";
+    fs::create_directories(state_dir);
+    const fs::path state_file = state_dir / "display.json";
+
+    const std::string garbage = "{\"media\":[\"a.mp4\"], TRUNCATED";
+    { std::ofstream f(state_file); f << garbage; }
+
+    reed::LoadStatus status = reed::LoadStatus::Ok;
+    auto bad = ConfigManager::load_state(&status);
+    check("malformed file does not load", !bad.has_value());
+    check("reported as Malformed, not Missing",
+          status == reed::LoadStatus::Malformed);
+
+    std::ostringstream after;
+    { std::ifstream f(state_file); after << f.rdbuf(); }
+    check("malformed file left byte-identical", after.str() == garbage);
+
+    fs::remove(state_file);
+    status = reed::LoadStatus::Ok;
+    auto gone = ConfigManager::load_state(&status);
+    check("absent file does not load", !gone.has_value());
+    check("reported as Missing", status == reed::LoadStatus::Missing);
+  }
 
   fs::remove_all(tmp);
   std::printf("%s\n", failures ? "FAILURES" : "all checks passed");
