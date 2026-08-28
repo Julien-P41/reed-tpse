@@ -231,7 +231,9 @@ int cmd_daemon_start(const std::string& port, bool foreground,
     actual_port = *detected;
   }
 
-  bool power_auto = config && config->power_auto;
+  bool report_ac = !config || config->report_ac_power;
+  bool report_lock = !config || config->report_lock;
+  bool report_shutdown = !config || config->report_shutdown;
   std::optional<bool> last_locked;
 
   reed::ScreenConfig screen_config;
@@ -312,11 +314,13 @@ int cmd_daemon_start(const std::string& port, bool foreground,
     // logs 100 too, so the line does not echo the request), and the backlight
     // sysfs needs root to read. One extra frame is cheaper than the doubt.
     dev.set_brightness(state->brightness);
-    if (power_auto) {
+    if (report_ac) {
       // Tell the device where the host stands as soon as we are talking to it.
       if (auto batt = on_battery()) {
         dev.send_power_event(*batt ? "on-battery" : "ac-power");
       }
+    }
+    if (report_lock) {
       // Lock state is applied after the media below, so that a locked session
       // does not get the normal media painted over its lock screen.
       if (auto locked = session_locked()) {
@@ -358,7 +362,7 @@ int cmd_daemon_start(const std::string& port, bool foreground,
     // on the normal media. The loop only sees *transitions*, so without this a
     // daemon restart while locked would show the desktop media until the next
     // unlock.
-    if (power_auto && config && config->lock_media) {
+    if (report_lock && config && config->lock_media) {
       if (auto locked = session_locked(); locked && *locked) {
         reed::ScreenConfig lock_cfg = screen_config;
         lock_cfg.media = {*config->lock_media};
@@ -477,7 +481,9 @@ int cmd_daemon_start(const std::string& port, bool foreground,
         state = st;
         rebuild_screen_config();
       }
-      power_auto = config && config->power_auto;
+      report_ac = !config || config->report_ac_power;
+      report_lock = !config || config->report_lock;
+      report_shutdown = !config || config->report_shutdown;
       push_telemetry = state->hud.enabled || state->fan_duty.has_value() ||
                        (state->hud_right && state->hud_right->enabled);
       // Reloading without applying left the daemon holding settings it never
@@ -510,7 +516,7 @@ int cmd_daemon_start(const std::string& port, bool foreground,
       }
     }
 
-    if (power_auto) {
+    if (report_lock) {
       // Cheap enough on the keepalive cadence, and it avoids needing a session
       // bus -- a system-scope daemon has no session of its own.
       if (auto locked = session_locked()) {
@@ -571,7 +577,7 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   // Loop exited, so we were asked to stop -- which during a host shutdown is
   // the shutdown itself. Say so: with sleep-display enabled the panel blanks
   // immediately instead of waiting out the ~60s keepalive timeout.
-  if (power_auto && device && device->is_connected()) {
+  if (report_shutdown && device && device->is_connected()) {
     device->send_power_event("shutdown");
     if (verbose) std::cerr << "power: sent shutdown on exit\n";
   }

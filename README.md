@@ -454,17 +454,26 @@ exits.
 
 #### Auto mode
 
+The daemon mirrors the host's state to the device by default. Three separate
+switches, each on unless you turn it off:
+
 ```json
 // ~/.config/reed-tpse/config.json
-{"port": "/dev/tryx-panorama", "power_auto": true}
+{"report_ac_power": true, "report_lock": true, "report_shutdown": true}
 ```
 
-With `power_auto`, the daemon mirrors the host state:
+| key | what it does |
+|---|---|
+| `report_ac_power` | announces mains/battery on connect |
+| `report_lock` | watches the session's `LockedHint` via `loginctl` on the keepalive cadence and sends `lock-screen` / `unlock-screen` as it changes -- and drives `lock-display` |
+| `report_shutdown` | sends `shutdown` when the daemon exits |
 
-- **on connect** -- announces mains/battery and the current lock state
-- **while running** -- watches the session's `LockedHint` via `loginctl` on the
-  keepalive cadence and sends `lock-screen` / `unlock-screen` as it changes
-- **on exit** -- sends `shutdown`
+⚠ These were one `power_auto` flag. Bundling them caused a real bug: with
+`lock_media` set, the branch that sends the *unlock* event was skipped along
+with the lock event, and the panel stayed stuck on standby across a daemon
+restart. A config with `power_auto` still works -- its value becomes the
+default for all three -- so an existing file that switched the behaviour off
+keeps it off.
 
 That last one is the useful one: the daemon is stopped as part of the host
 shutting down, so the device is told rather than left to time out.
@@ -487,7 +496,7 @@ so `lock-display` takes effect on a running daemon without a restart. (It has
 to: `lock-display` needs no serial port, so it is editable while the daemon
 holds the device.)
 
-The setting lives in `config.json` alongside `power_auto`, not in the state
+The setting lives in `config.json` alongside `report_lock`, not in the state
 file -- `display` rewrites the state file, and this is configuration rather
 than runtime state.
 
@@ -756,7 +765,7 @@ Two files, with different jobs.
 **`~/.config/reed-tpse/config.json`** -- things you set once:
 
 ```json
-{"keepalive_interval":10, "power_auto":true,
+{"keepalive_interval":10, "report_lock":true,
  "lock_media":"lockscreen.mp4", "lock_brightness":30}
 ```
 
@@ -764,7 +773,7 @@ Two files, with different jobs.
 |---|---|
 | `port` | pin a serial port; omit to auto-detect |
 | `keepalive_interval` | seconds between daemon handshakes (1-55, default 10) |
-| `power_auto` | mirror host power/lock state to the device |
+| `report_ac_power` / `report_lock` / `report_shutdown` | mirror host power, lock and shutdown state to the device (all default true) |
 | `lock_media` / `lock_brightness` | what to show while the session is locked |
 
 ⚠ There is no `brightness` key. There used to be, and it did nothing -- the

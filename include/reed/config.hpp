@@ -17,7 +17,20 @@ struct Config {
   // Have the daemon mirror the host's power state to the device: lock/unlock
   // as the session locks, and `shutdown` when the daemon is stopped. Opt-in,
   // since it changes what the panel does without being asked.
-  bool power_auto = false;
+  // Three independent behaviours, all on by default.
+  //
+  // They used to be one `power_auto` flag, and bundling them caused a real
+  // bug: with lock_media configured, the branch that would have sent the
+  // unlock event was skipped along with the lock event, so the panel stayed
+  // on the sticky standby state across a daemon restart. They are unrelated
+  // to each other and are now switched separately.
+  //
+  // Defaulting to on because there is nothing to opt into: a daemon that
+  // holds the device and does not tell it what the host is doing is simply
+  // worse. Set any of them false in config.json to suppress it.
+  bool report_ac_power = true;      // ac-power / on-battery
+  bool report_lock = true;          // lock-screen / unlock-screen, or lock_media
+  bool report_shutdown = true;      // `shutdown` when the daemon exits
   // Shown while the session is locked, in place of the firmware's standby
   // clip. Unset means "use the firmware default", i.e. send the lock-screen
   // power event instead. Configuration, not runtime state -- it belongs here

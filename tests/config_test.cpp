@@ -131,14 +131,16 @@ int main() {
   Config c;
   c.port = "/dev/tryx-panorama";
   c.keepalive_interval = 12;
-  c.power_auto = true;
+  c.report_lock = false;  // one of the three off, to prove they are separate
   c.lock_media = "sunset.mp4";
   c.lock_brightness = 30;
   check("save_config succeeds", ConfigManager::save_config(c));
   auto rc = ConfigManager::load_config();
   check("port", rc && rc->port == c.port);
   check("keepalive_interval", rc && rc->keepalive_interval == c.keepalive_interval);
-  check("power_auto", rc && rc->power_auto == c.power_auto);
+  check("report_ac_power", rc && rc->report_ac_power);
+  check("report_lock (set false)", rc && !rc->report_lock);
+  check("report_shutdown", rc && rc->report_shutdown);
   check("lock_media", rc && rc->lock_media == c.lock_media);
   check("lock_brightness", rc && rc->lock_brightness == c.lock_brightness);
 
@@ -155,9 +157,30 @@ int main() {
   ConfigManager::save_config(cleared);
   auto rc3 = ConfigManager::load_config();
   check("cleared lock_media stays unset", rc3 && !rc3->lock_media);
-  check("power_auto survives the clear", rc3 && rc3->power_auto);
+  check("report_lock survives the clear", rc3 && !rc3->report_lock);
   check("lock_brightness survives the clear",
         rc3 && rc3->lock_brightness == 30);
+
+  // A config written before the split carried one `power_auto` flag. Someone
+  // who turned it off meant "do not do any of this", and must not have it
+  // silently turned back on by three new keys defaulting to true.
+  std::puts("legacy power_auto still switches all three:");
+  {
+    const fs::path cfg_dir = tmp / "reed-tpse";
+    fs::create_directories(cfg_dir);
+    { std::ofstream f(cfg_dir / "config.json"); f << R"({"power_auto":false})"; }
+    auto legacy = ConfigManager::load_config();
+    check("legacy false -> ac off", legacy && !legacy->report_ac_power);
+    check("legacy false -> lock off", legacy && !legacy->report_lock);
+    check("legacy false -> shutdown off", legacy && !legacy->report_shutdown);
+
+    { std::ofstream f(cfg_dir / "config.json");
+      f << R"({"power_auto":false,"report_shutdown":true})"; }
+    auto mixed = ConfigManager::load_config();
+    check("a specific key still overrides the legacy default",
+          mixed && mixed->report_shutdown && !mixed->report_lock);
+    fs::remove(cfg_dir / "config.json");
+  }
 
   // Why a load failed, and -- the part that matters -- that a file which
   // exists but does not parse is left alone. Reporting "missing" for a bad

@@ -445,7 +445,7 @@ int cmd_delete(const std::vector<std::string>& files) {
 }
 
 // Media shown while the session is locked, replacing the firmware's standby
-// clip. Only meaningful with power_auto, which is what notices the lock.
+// clip. Only meaningful with `report_lock`, which is what notices the lock.
 int cmd_lock_display(const std::string& port, const std::vector<std::string>& args,
                             int brightness, bool brightness_given, bool verbose) {
   (void)port;
@@ -459,8 +459,8 @@ int cmd_lock_display(const std::string& port, const std::vector<std::string>& ar
     } else {
       std::cout << "Lock display: (firmware standby clip)\n";
     }
-    std::cout << "  Applies when the daemon is running with \"power_auto\": "
-                 "true.\n";
+    std::cout << "  Applies while the daemon is running, unless "
+                 "\"report_lock\" is false.\n";
     return 0;
   }
 
@@ -517,8 +517,8 @@ int cmd_lock_display(const std::string& port, const std::vector<std::string>& ar
                  "the burn-in case.\n"
                  "    Consider --brightness 40 or lower, and a dark clip.\n";
   }
-  std::cout << "  Applies when the daemon is running with \"power_auto\": "
-               "true.\n";
+  std::cout << "  Applies while the daemon is running, unless "
+               "\"report_lock\" is false.\n";
   if (verbose) std::cout << "  (saved to " << reed::ConfigManager::get_config_path() << ")\n";
   return 0;
 }

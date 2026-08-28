@@ -160,7 +160,13 @@ std::optional<Config> ConfigManager::load_config(LoadStatus* status) {
   Config config;
   config.port = get_string(json, "port", config.port);
   config.keepalive_interval = get_int(json, "keepalive_interval", config.keepalive_interval);
-  config.power_auto = get_bool(json, "power_auto", config.power_auto);
+  // Legacy: one `power_auto` flag covered all three. Honour it as the default
+  // for each, so a config that switched the behaviour off keeps it off, then
+  // let any specific key override.
+  const bool legacy = get_bool(json, "power_auto", true);
+  config.report_ac_power = get_bool(json, "report_ac_power", legacy);
+  config.report_lock = get_bool(json, "report_lock", legacy);
+  config.report_shutdown = get_bool(json, "report_shutdown", legacy);
   {
     const std::string lm = get_string(json, "lock_media", "");
     if (!lm.empty()) config.lock_media = lm;
@@ -179,7 +185,9 @@ bool ConfigManager::save_config(const Config& config) {
   obj["port"] = picojson::value(config.port);
   obj["keepalive_interval"] =
       picojson::value(static_cast<double>(config.keepalive_interval));
-  obj["power_auto"] = picojson::value(config.power_auto);
+  obj["report_ac_power"] = picojson::value(config.report_ac_power);
+  obj["report_lock"] = picojson::value(config.report_lock);
+  obj["report_shutdown"] = picojson::value(config.report_shutdown);
   if (config.lock_media) {
     obj["lock_media"] = picojson::value(*config.lock_media);
   }
