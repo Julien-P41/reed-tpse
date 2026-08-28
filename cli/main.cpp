@@ -2370,7 +2370,6 @@ int main(int argc, char* argv[]) {
   std::string fan_profile;
   int fan_speed = -1;
   int watch = 0;
-  int keepalive_interval = config.keepalive_interval;
 
   std::string command;
   std::vector<std::string> args;
