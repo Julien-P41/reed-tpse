@@ -29,6 +29,7 @@ target_compile_options(reed PRIVATE
 add_executable(reed-tpse
     cli/main.cpp
     cli/cli_common.cpp
+    cli/cmd_device.cpp
 )
 target_link_libraries(reed-tpse PRIVATE reed)
 
