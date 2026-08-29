@@ -8,12 +8,17 @@
 #include <cstdio>
 #include <iostream>
 #include <sstream>
+#include <vector>
 
 namespace reed {
 
 namespace {
 // The cooler's own UI app -- the thing that acts on screen and fan commands.
 constexpr const char* kUiPackage = "com.baiyi.homeui.tkcfanhomeui";
+
+// The cooler reports itself as product/model/device `cm01` -- the same id the
+// udev rule matches on.
+constexpr const char* kProduct = "cm01";
 }  // namespace
 
 
@@ -97,6 +102,62 @@ std::optional<std::string> Adb::run_command(
   return result;
 }
 
+// The serial of the cooler, for `adb -s`.
+//
+// Without this every adb call is ambiguous the moment a second device is
+// attached -- a phone, a tablet, an emulator. adb then answers "adb: more than
+// one device/emulator", which does not contain "error:", so it slipped past
+// the checks and got parsed as output: `list` printed that sentence as a media
+// filename, and `display` rejected real files as missing.
+//
+// Resolved once per process from `adb devices -l`, preferring the entry whose
+// product is cm01. If nothing matches but exactly one device is attached, that
+// one is used -- keeping the single-device case working even if the product
+// string ever changes.
+static std::optional<std::string> target_serial() {
+  static bool resolved = false;
+  static std::optional<std::string> serial;
+  if (resolved) return serial;
+  resolved = true;
+
+  auto out = Adb::devices_verbose();
+  if (!out) return serial;
+
+  std::vector<std::string> online;
+  std::istringstream iss(*out);
+  std::string line;
+  while (std::getline(iss, line)) {
+    const size_t tab = line.find_first_of(" \t");
+    if (tab == std::string::npos) continue;
+    if (line.find("\tdevice") == std::string::npos &&
+        line.find(" device ") == std::string::npos) {
+      continue;
+    }
+    const std::string id = line.substr(0, tab);
+    if (id.empty() || id == "List") continue;
+    online.push_back(id);
+    if (line.find(std::string("product:") + kProduct) != std::string::npos) {
+      serial = id;
+      return serial;
+    }
+  }
+  if (online.size() == 1) serial = online.front();
+  return serial;
+}
+
+// Prefix a device-targeted call with `-s <serial>` when one is known.
+static std::vector<std::string> targeted(const std::vector<std::string>& args) {
+  auto serial = target_serial();
+  if (!serial) return args;
+  std::vector<std::string> out{"-s", *serial};
+  out.insert(out.end(), args.begin(), args.end());
+  return out;
+}
+
+std::optional<std::string> Adb::devices_verbose() {
+  return run_command({"devices", "-l"});
+}
+
 bool Adb::is_device_connected() {
   auto result = run_command({"devices"});
   if (result && devices_output_has_device(*result)) {
@@ -125,7 +186,7 @@ bool Adb::is_device_connected() {
 
 bool Adb::push(const std::string& local_path, const std::string& remote_name) {
   std::string remote_path = std::string(MEDIA_PATH) + remote_name;
-  auto result = run_command({"push", local_path, remote_path});
+  auto result = run_command(targeted({"push", local_path, remote_path}));
 
   if (!result) {
     return false;
@@ -136,7 +197,7 @@ bool Adb::push(const std::string& local_path, const std::string& remote_name) {
 }
 
 std::optional<std::vector<std::string>> Adb::list_media() {
-  auto result = run_command({"shell", "ls", "-1", MEDIA_PATH});
+  auto result = run_command(targeted({"shell", "ls", "-1", MEDIA_PATH}));
 
   if (!result) {
     return std::nullopt;
@@ -165,7 +226,7 @@ std::optional<std::vector<std::string>> Adb::list_media() {
 }
 
 std::optional<std::vector<std::string>> Adb::list_presets() {
-  auto result = run_command({"shell", "ls", "-1", PRESET_PATH});
+  auto result = run_command(targeted({"shell", "ls", "-1", PRESET_PATH}));
   if (!result) return std::nullopt;
   if (result->find("No such file") != std::string::npos ||
       result->find("error:") != std::string::npos) {
@@ -192,14 +253,14 @@ std::optional<std::vector<std::string>> Adb::list_presets() {
 }
 
 bool Adb::ui_ready() {
-  auto out = run_command({"shell", "pidof", kUiPackage});
+  auto out = run_command(targeted({"shell", "pidof", kUiPackage}));
   if (!out) return false;
   // pidof prints nothing and exits non-zero when the process is absent.
   return out->find_first_of("0123456789") != std::string::npos;
 }
 
 bool Adb::reboot() {
-  return run_command({"reboot"}).has_value();
+  return run_command(targeted({"reboot"})).has_value();
 }
 
 // Single-quote for the DEVICE's shell.
@@ -226,7 +287,7 @@ static std::string device_shell_quote(const std::string& in) {
 
 bool Adb::remove(const std::string& filename) {
   std::string remote_path = std::string(MEDIA_PATH) + filename;
-  auto result = run_command({"shell", "rm", device_shell_quote(remote_path)});
+  auto result = run_command(targeted({"shell", "rm", device_shell_quote(remote_path)}));
 
   return result && result->find("No such file") == std::string::npos;
 }

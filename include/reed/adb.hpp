@@ -32,6 +32,10 @@ class Adb {
   // silently lost.
   static bool ui_ready();
 
+  // `adb devices -l`, used to pick the cooler when more than one device is
+  // attached. Public only so the selection helper can reach it.
+  static std::optional<std::string> devices_verbose();
+
  private:
   static std::optional<std::string> run_command(
       const std::vector<std::string>& args);
