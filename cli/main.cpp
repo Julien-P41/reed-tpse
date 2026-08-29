@@ -39,7 +39,7 @@ static void print_usage(const char* prog) {
          "response\n"
          "  fan <low|mid|high|full> Show LCD fan RPM, or set a named tier\n"
          "                          (--smart follows temperature, --speed N pins\n"
-         "                           a duty, --reset restores the vendor default)\n"
+         "                           a duty)\n"
          "  screen <on|off>         Turn the panel itself on or off\n"
          "  rotate <normal|mirror>  Mirror Mode ! RESTARTS the cooler\n"
          "  sleep-display <on|off>  What the panel shows once the host stops\n"
@@ -81,7 +81,6 @@ static void print_usage(const char* prog) {
          "control than\n"
          "                          the named tiers (low=35 mid=57 high=78 "
          "full=100)\n"
-         "  --reset                 Reset the fan profile (fan)\n"
          "  --profile <file>        Send a fan profile (fan); refuses "
          "unvalidated\n"
          "                          curve data unless --force\n"
@@ -205,7 +204,6 @@ int main(int argc, char* argv[]) {
   bool json_output = false;
   bool brightness_given = false;
   bool system_scope = false;
-  bool fan_reset = false;
   bool force = false;
   std::string fan_profile;
   int fan_speed = -1;
@@ -277,8 +275,6 @@ int main(int argc, char* argv[]) {
       json_output = true;
     } else if (arg == "--system") {
       system_scope = true;
-    } else if (arg == "--reset") {
-      fan_reset = true;
     } else if (arg == "--force") {
       force = true;
     } else if (arg == "--profile") {
@@ -370,7 +366,7 @@ int main(int argc, char* argv[]) {
     }
     return cmd_sleep_display(port, args[0], verbose);
   } else if (command == "fan") {
-    return cmd_fan(port, fan_reset, args.empty() ? std::string() : args[0],
+    return cmd_fan(port, args.empty() ? std::string() : args[0],
                    fan_speed, fan_smart, fan_profile, force, verbose);
   } else if (command == "lock-display") {
     return cmd_lock_display(port, args, brightness, brightness_given, verbose);

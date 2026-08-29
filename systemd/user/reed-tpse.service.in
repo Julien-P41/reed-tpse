@@ -14,7 +14,7 @@ After=local-fs.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/reed-tpse daemon start --foreground
+ExecStart=@CMAKE_INSTALL_PREFIX@/bin/reed-tpse daemon start --foreground
 Restart=on-failure
 RestartSec=5
 

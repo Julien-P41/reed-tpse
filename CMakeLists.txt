@@ -96,7 +96,13 @@ set(REED_SYSTEMD_SCOPE "none" CACHE STRING
 set_property(CACHE REED_SYSTEMD_SCOPE PROPERTY STRINGS system user none)
 
 if(REED_SYSTEMD_SCOPE STREQUAL "user")
-    install(FILES systemd/user/reed-tpse.service DESTINATION lib/systemd/user)
+    # Templated like the system unit. Hardcoding /usr/local/bin meant a build
+    # with a different CMAKE_INSTALL_PREFIX installed a unit pointing at a
+    # binary that was never there.
+    configure_file(systemd/user/reed-tpse.service.in
+                   ${CMAKE_CURRENT_BINARY_DIR}/reed-tpse.service @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/reed-tpse.service
+            DESTINATION lib/systemd/user)
 elseif(REED_SYSTEMD_SCOPE STREQUAL "system")
     if(NOT REED_SERVICE_USER)
         # `sudo make install` would otherwise bake in "root".

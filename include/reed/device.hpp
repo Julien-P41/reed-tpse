@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "reed/wire.hpp"
+
 #include "protocol.hpp"
 
 namespace reed {
@@ -45,7 +47,7 @@ extern const FanCurve kDefaultCurve;
 // `conn`, on every connect -- one frame instead of the five-plus we used to
 // send, which is what the post-connect race was about.
 struct FullConfig {
-  std::string temperature_unit = "Celsius";
+  std::string temperature_unit = wire::kCelsius;
   bool screen_enable = true;
   bool display_in_sleep = false;
   int brightness = 75;
@@ -69,9 +71,9 @@ struct FullConfig {
 
 struct ScreenConfig {
   std::vector<std::string> media;
-  std::string screen_mode = "Full Screen";
+  std::string screen_mode = wire::kFullScreen;
   std::string ratio = "2:1";
-  std::string play_mode = "Single";
+  std::string play_mode = wire::kPlaySingle;
   std::vector<std::string> sysinfo_display;  // max 3 firmware-defined labels
   DisplaySettings settings;
 
@@ -261,11 +263,6 @@ class Device {
                                      const DisplaySettings& settings,
                                      const std::vector<std::string>& sysinfo);
 
-  // Restore the vendor's own default fan setting: Smart Mode on the "low"
-  // curve with fixedMode 40, exactly the payload KANALI 1.2.1 sends. Replaces
-  // an earlier recovery that installed empty curve arrays and a numeric-less
-  // `fixedMode` -- that shape is what stopped the fan dead at 0 RPM.
-  std::optional<Response> reset_fan_profile();
 
   // Set the LCD fan to a fixed duty. `tier` is the vendor's tier name and
   // `duty` a percentage. Measured RPM per duty is in the README's Fan section;

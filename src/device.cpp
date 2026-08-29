@@ -110,6 +110,17 @@ std::optional<std::string> Device::find_device(bool verbose) {
 
   std::vector<std::string> candidates;
 
+  // The stable name our udev rule installs, first. It points at whichever
+  // ttyACM the cooler landed on, so trying it first gets the right device on a
+  // machine with several ACM ports -- and it is the name the diagnostics
+  // print, which is less confusing than naming a number that moves.
+  {
+    std::error_code sym_ec;
+    if (fs::exists("/dev/tryx-panorama", sym_ec) && !sym_ec) {
+      candidates.push_back("/dev/tryx-panorama");
+    }
+  }
+
   // Scan /dev for ttyACM* devices
   for (const auto& entry : fs::directory_iterator("/dev")) {
     std::string name = entry.path().filename().string();
@@ -862,13 +873,6 @@ std::optional<Response> Device::set_fan_smart(const FanCurve& curve,
       fixed_duty));
 }
 
-std::optional<Response> Device::reset_fan_profile() {
-  // The vendor default, verbatim: Smart Mode on the low curve, fixedMode 40.
-  // The previous recovery here installed four tier sub-objects with empty
-  // curves and `fixedMode: []`; that is the payload family that stopped the
-  // fan at 0 RPM, and no tier selection would restart it.
-  return set_fan_smart(payload::kDefaultCurve, 40);
-}
 
 std::optional<Response> Device::set_temperature_unit(const std::string& unit) {
   picojson::object obj;

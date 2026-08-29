@@ -101,6 +101,26 @@ and a udev rule.
 `reed-tpse rotate` reboots the device for you. See
 [docs/firmware-notes.md](docs/firmware-notes.md).
 
+### Coming from upstream
+
+One flag is gone: **`display --keepalive`**. It held the connection open in the
+foreground so the device would not revert to firmware content, and it was a
+second implementation of what the daemon does -- one that also held the serial
+port against every other command while looking like an ordinary finished
+process. Run the daemon instead; it keeps the connection alive, and `display`
+hands over to it rather than failing when it holds the port.
+
+Scripts that drove the panel with `--keepalive` no longer need to take the port
+at all:
+
+```bash
+reed-tpse display intro.mp4     # the daemon applies it and keeps it alive
+sleep 120
+reed-tpse display loop.mp4
+```
+
+Everything else upstream accepts still works, with the same defaults.
+
 ## Documentation
 
 | | |
@@ -334,7 +354,6 @@ reed-tpse fan mid
 reed-tpse fan high
 reed-tpse fan full
 reed-tpse fan --speed 45   # explicit duty, 0-100, for finer control
-reed-tpse fan --reset      # hand back to the firmware's own curve
 ```
 
 Pump RPM is not repeated here -- `reed-tpse status` reports it, and it is
@@ -350,7 +369,6 @@ temperature curve, and the app sends both together whichever mode is active.
 | `mid` | 60% | `[0,10] [10,20] [30,35] [50,50] [65,75] [80,80] [90,100] [100,100]` |
 | `high` | 80% | `[0,10] [10,20] [30,50] [40,70] [55,85] [70,90] [90,100] [100,100]` |
 | `full` | 100% | `[0,10] [10,20] [30,70] [40,100] [65,100] [80,100] [90,100] [100,100]` |
-| `--reset` | 40% | the `low` curve, in Smart Mode -- the vendor default |
 
 ⚠ An earlier version of this table read 35/57/78/100. Those were interpolated
 by hand from RPM measurements before the vendor's real values were known;
@@ -423,8 +441,8 @@ daemon dying -- a latched Fixed Mode duty does *not* revert.
 
 `smartMode` is a flat `ArrayList` of numbers -- not `[x, y]` pairs; there is no
 curve-point class anywhere in the APK. Its element values are still unknown, so
-`--reset` sends it empty, which yields the firmware default. Recovering the real
-curve needs a captured vendor payload.
+`fan low` restores the vendor default -- Smart Mode on the low curve with a
+fixed fallback of 40%, which is exactly what the app ships.
 
 #### `--profile` and `--force`
 
@@ -778,12 +796,16 @@ Two files, with different jobs.
 
 ⚠ There is no `brightness` key. There used to be, and it did nothing -- the
 value that reached the device was always either `--brightness` or the stored
-display state. If your config still has one, it is ignored and can be deleted.
+display state. If your config still has one it is ignored, and the next command
+that writes the file drops it. That is deliberate, but it means a key you added
+by hand can disappear without comment; brightness lives in the state file, set
+with `reed-tpse brightness`.
 
 **`~/.local/state/reed-tpse/display.json`** -- what the daemon re-applies on
-every connect: media, brightness, ratio, play mode, screen mode, filter, fan
-tier and the HUD. Written by the commands, not meant to be hand-edited, though
-nothing stops you.
+every connect: media, brightness, ratio, play mode, screen mode, filter and its
+opacity, panel power, sleep behaviour, fan tier and duty, and both HUD zones
+(`hud` and `hud_right`). Written by the commands, not meant to be hand-edited,
+though nothing stops you.
 
 ## Architecture
 

@@ -190,7 +190,9 @@ std::optional<Response> parse_response(const std::vector<uint8_t>& data) {
     std::istringstream iss(first_line);
     iss >> response.version >> response.status;
 
-    // AckNumber echoes the SeqNumber of the request being answered.
+    // The device's AckNumber. NOT an echo of the SeqNumber we sent -- it is
+    // the device's own counter. See the warning on Response::ack; correlating
+    // on it was tried and broke every command.
     const size_t ack_at = header_part.find("AckNumber=");
     if (ack_at != std::string::npos) {
       try {

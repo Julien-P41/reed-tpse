@@ -121,14 +121,14 @@ static bool profile_is_unsafe(const picojson::value& v, std::string* why) {
   return false;
 }
 
-int cmd_fan(const std::string& port, bool reset,
+int cmd_fan(const std::string& port,
                    const std::string& tier_arg, int duty_arg, bool smart,
                    const std::string& profile_path, bool force, bool verbose) {
   // Checked before the port is opened: connect() prints its own "already open"
   // diagnostic, which is noise when handing over to the daemon is the expected
-  // path. `fan` with no arguments is a read, and --profile/--reset need the
-  // port; only a tier or duty is state-backed.
-  if (daemon_holds_port(port) && profile_path.empty() && !reset &&
+  // path. `fan` with no arguments is a read and --profile needs the port;
+  // only a tier or duty is state-backed.
+  if (daemon_holds_port(port) && profile_path.empty() &&
       (!tier_arg.empty() || duty_arg >= 0)) {
     const FanTier* t = tier_arg.empty()
                            ? lookup_fan_tier(nearest_tier_name(duty_arg))
@@ -185,7 +185,7 @@ int cmd_fan(const std::string& port, bool reset,
           << "     \"fixedMode\": 40}\n\n"
           << "  8 [degC, duty%] points, and a NUMERIC fixedMode in both\n"
           << "  modes. A non-numeric fixedMode coerces to 0 and stops the LCD\n"
-          << "  fan dead on firmware V1.0.11; only `fan --reset` recovers it.\n"
+          << "  fan dead on firmware V1.0.11.\n"
           << "  Override with --force if you know better.\n";
       return 1;
     }
@@ -281,39 +281,6 @@ int cmd_fan(const std::string& port, bool reset,
     return 0;
   }
 
-  if (reset) {
-    if (!device.reset_fan_profile()) {
-      std::cerr << "No response while resetting the fan profile\n";
-      return 1;
-    }
-
-    // A REAL telemetry frame, not an empty one. The reset installs Smart Mode,
-    // which evaluates the curve against the CPU temperature it was last given
-    // -- and an empty frame is all zeroes, which every vendor curve reads as
-    // its 10% floor. The command that exists to recover a fan was dropping it
-    // to almost nothing.
-    reed::SystemMonitor monitor;
-    monitor.sample();  // primes the /proc/stat delta; the first sample is cold
-    const reed::SystemMetrics metrics = monitor.sample();
-    device.send_sysinfo(
-        build_sysinfo({"CPU Temperature", "GPU Temperature"}, metrics));
-
-    // Persist it too, or the daemon re-applies the previous tier on its next
-    // connect and quietly undoes the reset.
-    if (auto state = load_state_for_update()) {
-      state->fan_tier.reset();
-      state->fan_duty.reset();
-      reed::ConfigManager::save_state(*state);
-    }
-
-    std::cout << "Fan reset to the vendor default: Smart Mode on the low "
-                 "curve, fixed fallback 40%.\n"
-              << "  Duty now follows the CPU temperature being pushed ("
-              << static_cast<int>(metrics.cpu.temperature_c) << "°C).\n"
-              << "  ⚠ Smart Mode needs the daemon running; with nothing "
-                 "pushing, the\n    device keeps the last value it saw.\n";
-    return 0;
-  }
 
   auto status = device.get_status();
   if (!status) {

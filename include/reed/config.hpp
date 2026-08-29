@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "reed/wire.hpp"
+
 namespace reed {
 
 struct Config {
@@ -46,7 +48,7 @@ struct HudConfig {
   std::string color = "FFFFFF";  // bare hex, no `#`
   std::vector<std::string> badges;   // "CPU Badge", "GPU Badge"
   int push_interval_sec = 5;
-  std::string temperature_unit = "Celsius";  // Celsius | Fahrenheit
+  std::string temperature_unit = wire::kCelsius;  // Celsius | Fahrenheit
   std::string cpu_name;
   std::string gpu_name;
 };
@@ -54,8 +56,8 @@ struct HudConfig {
 struct DisplayState {
   std::vector<std::string> media;
   std::string ratio = "2:1";
-  std::string screen_mode = "Full Screen";
-  std::string play_mode = "Single";
+  std::string screen_mode = wire::kFullScreen;
+  std::string play_mode = wire::kPlaySingle;
   int brightness = 75;  // default lower than max setting to reduce burn-in risk on the display
   HudConfig hud;
   // Screen Splitting draws two independent overlays -- the wire carries

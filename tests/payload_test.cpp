@@ -312,6 +312,41 @@ int main() {
     std::filesystem::remove_all(tmp);
   }
 
+  // What `hud clear` must produce. It used to hand-assemble this, and the copy
+  // had drifted twice over: it dropped the media filter, and it set the split
+  // screen_mode without the flag screen_object branches on -- yielding a
+  // payload labelled "Screen Splitting" in the single-zone body.
+  std::puts("hud clear -> payload:");
+  {
+    reed::DisplayState st;
+    st.media = {"left.png", "right.png"};
+    st.screen_mode = "Screen Splitting";
+    st.filter = "Rain";
+    st.filter_opacity = 45;
+    st.hud.enabled = true;
+    st.hud.metrics = {"CPU Temperature"};
+    reed::HudConfig right;
+    right.enabled = true;
+    right.metrics = {"GPU Temperature"};
+    st.hud_right = right;
+
+    // Exactly what the command does to the state before deriving the payload.
+    st.hud = reed::HudConfig{};
+    st.hud_right.reset();
+
+    const reed::ScreenConfig cfg = reed::screen_config_from(st);
+    check("filter survives the clear", cfg.settings.filter == "Rain");
+    check("still a split payload", cfg.split);
+    check("left zone has no metrics", cfg.sysinfo_display.empty());
+    check("right zone has no metrics", cfg.split_sysinfo_right.empty());
+
+    const std::string frame = reed::payload::screen_config(cfg);
+    check("two settings blocks, not one",
+          frame.find("\"settings\":[{") != std::string::npos);
+    check("both metric lists empty",
+          frame.find("\"sysinfoDisplay\":[[],[]]") != std::string::npos);
+  }
+
   std::printf("%s\n", failures ? "FAILURES" : "all checks passed");
   return failures != 0;
 }

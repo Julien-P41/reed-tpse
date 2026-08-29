@@ -39,7 +39,7 @@ int cmd_lock_display(const std::string& port,
 
 int cmd_hud(const std::string& port, const std::vector<std::string>& args,
             bool verbose);
-int cmd_fan(const std::string& port, bool reset, const std::string& tier_arg,
+int cmd_fan(const std::string& port, const std::string& tier_arg,
             int duty_arg, bool smart, const std::string& profile_path,
             bool force, bool verbose);
 

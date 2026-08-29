@@ -154,23 +154,31 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
   reed::DisplayState state = *loaded;
 
   if (action == "clear") {
-    state.hud = reed::HudConfig{};  // reset
+    // Both zones. A split screen has two overlays, and clearing only the left
+    // one left the right still rendering with no way to remove it -- nothing
+    // anywhere reset hud_right.
+    state.hud = reed::HudConfig{};
+    state.hud_right.reset();
     if (!reed::ConfigManager::save_state(state)) {
       std::cerr << "Failed to save state\n";
       return 1;
     }
-    // Push a screen config without HUD fields so the device stops rendering
-    // the overlay immediately. Requires media to be present in state.
+
+    if (daemon_holds_port(port)) return defer_to_daemon("HUD cleared");
+
+    // Derived from the saved state, not hand-assembled. Building a
+    // ScreenConfig here by hand is what src/mapping.cpp exists to prevent, and
+    // this copy had already drifted: it dropped the media filter, and it
+    // copied screen_mode without the `split` flag that screen_object actually
+    // branches on -- so a split screen got a payload labelled "Screen
+    // Splitting" wrapped in the single-zone body.
+    //
+    // The metrics are cleared above, so the derived config carries none.
     if (!port.empty() && !state.media.empty()) {
       reed::Device device(port, verbose);
       if (device.connect()) {
         device.handshake();
-        reed::ScreenConfig cfg;
-        cfg.media = state.media;
-        cfg.ratio = state.ratio;
-        cfg.screen_mode = state.screen_mode;
-        cfg.play_mode = state.play_mode;
-        device.set_screen_config(cfg);
+        device.set_screen_config(reed::screen_config_from(state));
       }
     }
     std::cout << "HUD disabled.\n";
