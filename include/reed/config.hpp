@@ -65,12 +65,24 @@ struct DisplayState {
   // Unset means the right zone mirrors the left, which is what a split
   // configured before this existed did.
   std::optional<HudConfig> hud_right;
-  // Sleep-mode behaviour. Unset means "never configured, leave the device
-  // alone"; the setting is volatile on the device (it is lost whenever USB
-  // power is cut), so once set it has to be re-applied by the daemon.
+  // Sleep-mode behaviour and panel power. Both are volatile on the device --
+  // lost whenever USB power drops -- so the daemon re-applies them on every
+  // connect.
+  //
+  // Unset means "the user never chose", NOT "leave the device alone". These
+  // comments used to promise the latter and the code did not keep it: the
+  // daemon's post-connect `config` frame carries every field FullConfig has,
+  // so an unset value simply means that struct's default goes out -- panel on,
+  // standby animation, Celsius, brightness 75, the vendor fan curve. The
+  // guards below only stop an unset optional being read; they do not stop the
+  // default being sent.
+  //
+  // That is deliberate. One atomic frame is what closed the startup race, and
+  // "one frame carrying everything" cannot also be "assert only what the user
+  // chose" -- you cannot send half a frame. The vendor's app does the same:
+  // its `config` carries every field too. The cost is that reed-tpse asserts
+  // its defaults over anything else touching the panel, on every reconnect.
   std::optional<bool> display_in_sleep;
-  // Panel power. Unset means never configured; the daemon only asserts it
-  // once it has been set explicitly, so an untouched device is left alone.
   std::optional<bool> screen_on;
   // Overlay filter drawn across the media -- "Rain" or "Smoke" on the wire,
   // empty for none -- with its opacity. Part of `settings`, so it rides along

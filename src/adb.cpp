@@ -297,9 +297,18 @@ std::optional<std::vector<std::string>> Adb::list_presets() {
   return presets;
 }
 
-bool Adb::ui_ready() {
+std::optional<bool> Adb::ui_ready() {
   auto out = run_command(targeted({"shell", "pidof", kUiPackage}));
-  if (!out) return false;
+  if (!out) return std::nullopt;  // adb is not there at all
+
+  // adb complaining is not an answer about the UI. Its messages are prefixed
+  // "adb:" or "error:" -- neither contains a digit, so they used to read as
+  // "process absent" and start a 45s wait for a device that was not listening.
+  if (out->find("error:") != std::string::npos ||
+      out->find("adb:") != std::string::npos) {
+    return std::nullopt;
+  }
+
   // pidof prints nothing and exits non-zero when the process is absent.
   return out->find_first_of("0123456789") != std::string::npos;
 }

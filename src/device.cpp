@@ -110,14 +110,23 @@ std::optional<std::string> Device::find_device(bool verbose) {
 
   std::vector<std::string> candidates;
 
-  // The stable name our udev rule installs, first. It points at whichever
-  // ttyACM the cooler landed on, so trying it first gets the right device on a
-  // machine with several ACM ports -- and it is the name the diagnostics
-  // print, which is less confusing than naming a number that moves.
+  // The stable name our udev rule installs is identification on its own, and
+  // better identification than a handshake: the rule matched the USB vendor,
+  // product and product string before creating it. Accepting it without
+  // probing also keeps a promise `status` makes and could not previously
+  // keep -- it skips `POST conn` because that triggers a ~2s screen
+  // re-initialisation, which a read-only poll has no business causing, and
+  // then auto-detect did exactly that to work out which port to use.
+  //
+  // fs::exists follows the link, so a stale symlink for an unplugged cooler
+  // is not accepted.
   {
     std::error_code sym_ec;
     if (fs::exists("/dev/tryx-panorama", sym_ec) && !sym_ec) {
-      candidates.push_back("/dev/tryx-panorama");
+      if (verbose) {
+        std::cout << "found /dev/tryx-panorama (udev)\n";
+      }
+      return std::string("/dev/tryx-panorama");
     }
   }
 

@@ -802,6 +802,14 @@ that writes the file drops it. That is deliberate, but it means a key you added
 by hand can disappear without comment; brightness lives in the state file, set
 with `reed-tpse brightness`.
 
+⚠ The daemon asserts a **complete** device state on every connect, not just
+the parts you set. Its post-connect frame carries panel power, sleep
+behaviour, temperature unit, brightness, media and the fan curve together --
+one frame is what stops the device running half your settings and half the
+firmware's during startup. Anything you never configured is sent as this
+tool's default rather than left alone, so reed-tpse will overwrite another
+program touching the same panel every time it reconnects.
+
 **`~/.local/state/reed-tpse/display.json`** -- what the daemon re-applies on
 every connect: media, brightness, ratio, play mode, screen mode, filter and its
 opacity, panel power, sleep behaviour, fan tier and duty, and both HUD zones

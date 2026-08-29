@@ -263,7 +263,17 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   auto wait_for_ui = [&](int timeout_sec) {
     if (!reed::Adb::is_device_connected()) return;
     for (int waited = 0; waited < timeout_sec; ++waited) {
-      if (reed::Adb::ui_ready()) {
+      const auto ready = reed::Adb::ui_ready();
+      if (!ready) {
+        // adb cannot answer. Waiting changes nothing, so apply now rather than
+        // stalling the whole restore for a question that will not be answered.
+        if (verbose) {
+          std::cerr << "adb cannot report the device UI; applying without "
+                       "waiting\n";
+        }
+        return;
+      }
+      if (*ready) {
         if (waited && verbose) {
           std::cerr << "waited " << waited << "s for the device UI\n";
         }

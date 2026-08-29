@@ -30,7 +30,15 @@ class Adb {
   // well before it does, so a device that answers is not necessarily a device
   // that will act on what it is told. Anything applied before this is true is
   // silently lost.
-  static bool ui_ready();
+  // Is the cooler's UI app running?
+  //
+  // Tri-state on purpose. `false` means adb answered and the process is not
+  // there; `nullopt` means adb could not answer at all -- not installed, no
+  // device, the wrong device selected. Collapsing those into one `false` made
+  // an unanswerable question look like a slow boot, so the daemon sat through
+  // its full 45s wait on every connect for a condition no amount of waiting
+  // would change.
+  static std::optional<bool> ui_ready();
 
   // `adb devices -l`, used to pick the cooler when more than one device is
   // attached. Public only so the selection helper can reach it.
