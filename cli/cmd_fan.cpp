@@ -286,9 +286,32 @@ int cmd_fan(const std::string& port, bool reset,
       std::cerr << "No response while resetting the fan profile\n";
       return 1;
     }
-    device.send_sysinfo({});  // latch it, same as above
-    std::cout << "Fan profile reset to firmware default (empty curves, "
-                 "Full Speed / Smart Mode).\n";
+
+    // A REAL telemetry frame, not an empty one. The reset installs Smart Mode,
+    // which evaluates the curve against the CPU temperature it was last given
+    // -- and an empty frame is all zeroes, which every vendor curve reads as
+    // its 10% floor. The command that exists to recover a fan was dropping it
+    // to almost nothing.
+    reed::SystemMonitor monitor;
+    monitor.sample();  // primes the /proc/stat delta; the first sample is cold
+    const reed::SystemMetrics metrics = monitor.sample();
+    device.send_sysinfo(
+        build_sysinfo({"CPU Temperature", "GPU Temperature"}, metrics));
+
+    // Persist it too, or the daemon re-applies the previous tier on its next
+    // connect and quietly undoes the reset.
+    if (auto state = load_state_for_update()) {
+      state->fan_tier.reset();
+      state->fan_duty.reset();
+      reed::ConfigManager::save_state(*state);
+    }
+
+    std::cout << "Fan reset to the vendor default: Smart Mode on the low "
+                 "curve, fixed fallback 40%.\n"
+              << "  Duty now follows the CPU temperature being pushed ("
+              << static_cast<int>(metrics.cpu.temperature_c) << "°C).\n"
+              << "  ⚠ Smart Mode needs the daemon running; with nothing "
+                 "pushing, the\n    device keeps the last value it saw.\n";
     return 0;
   }
 

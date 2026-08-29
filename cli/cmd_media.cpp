@@ -317,7 +317,12 @@ int cmd_display(const std::string& port,
   // Without this the struct default ("Single") went out on every call, so a
   // multi-file `display` only ever showed the first file.
   if (!play_mode.empty()) state->play_mode = play_mode;
-  if (split) state->screen_mode = reed::wire::kScreenSplitting;
+  // Set BOTH ways. Only ever setting it on --split made Screen Splitting a
+  // one-way door: every later `display` kept shipping a two-zone payload, and
+  // --ratio was silently dropped along with it, with no way back short of
+  // editing the state file.
+  state->screen_mode =
+      split ? reed::wire::kScreenSplitting : reed::wire::kFullScreen;
   const reed::ScreenConfig config = screen_config_from(*state);
 
   const int effective_brightness =

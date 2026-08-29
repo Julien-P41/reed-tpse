@@ -132,6 +132,24 @@ std::optional<std::string> Device::find_device(bool verbose) {
     std::cout << "Scanning " << candidates.size() << " device(s)...\n";
   }
 
+  // A port already held by a reed-tpse process IS the device -- that is the
+  // daemon, and it only ever holds the cooler. Probing it would fail with
+  // EBUSY and be read as "not the device", so auto-detect used to report no
+  // device found whenever the daemon was running, which is the recommended
+  // setup. Returning it lets the caller hand over to the daemon or print an
+  // accurate error, instead of claiming the cooler is absent.
+  for (const auto& port : candidates) {
+    for (const auto& holder : find_port_holders(port)) {
+      if (holder.comm.find("reed-tpse") != std::string::npos) {
+        if (verbose) {
+          std::cout << "found " << port << " (held by PID " << holder.pid
+                    << ")\n";
+        }
+        return port;
+      }
+    }
+  }
+
   // Try each device
   for (const auto& port : candidates) {
     if (verbose) {

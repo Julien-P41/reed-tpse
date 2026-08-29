@@ -104,9 +104,19 @@ bool Adb::is_device_connected() {
   }
 
   // The adb server occasionally loses track of a connected device after a USB
-  // hotplug event — `adb devices` returns an empty list even though the cooler
-  // is physically attached. Recover by bouncing the server and retrying once.
-  std::cerr << "adb: no device visible, bouncing server and retrying...\n";
+  // hotplug event -- `adb devices` returns an empty list even though the cooler
+  // is physically attached. Bouncing the server recovers it.
+  //
+  // ONCE per process, though. This kills every adb session the user has, to
+  // other devices included, and the daemon asks this question on every connect
+  // -- so on a machine where the cooler is simply absent it was bouncing the
+  // server forever, on a timer. One attempt recovers the hotplug case; after
+  // that, absent means absent.
+  static bool bounced = false;
+  if (bounced) return false;
+  bounced = true;
+
+  std::cerr << "adb: no device visible, bouncing server and retrying once...\n";
   run_command({"kill-server"});
   run_command({"start-server"});
   result = run_command({"devices"});
@@ -192,9 +202,31 @@ bool Adb::reboot() {
   return run_command({"reboot"}).has_value();
 }
 
+// Single-quote for the DEVICE's shell.
+//
+// `adb shell` is not execve: adb joins its arguments and hands the result to a
+// shell on the cooler, so a filename containing ;, |, $(...) or a backtick is
+// interpreted there. Closing the host-side injection did not close this one --
+// they are two different shells, and only the first was fixed.
+//
+// POSIX single quotes protect everything except a single quote itself, which
+// is emitted as '\'' -- close, escape, reopen.
+static std::string device_shell_quote(const std::string& in) {
+  std::string out = "'";
+  for (char c : in) {
+    if (c == '\'') {
+      out += "'\\''";
+    } else {
+      out += c;
+    }
+  }
+  out += "'";
+  return out;
+}
+
 bool Adb::remove(const std::string& filename) {
   std::string remote_path = std::string(MEDIA_PATH) + filename;
-  auto result = run_command({"shell", "rm", remote_path});
+  auto result = run_command({"shell", "rm", device_shell_quote(remote_path)});
 
   return result && result->find("No such file") == std::string::npos;
 }

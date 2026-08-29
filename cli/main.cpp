@@ -290,6 +290,14 @@ int main(int argc, char* argv[]) {
     } else if (arg == "-h" || arg == "--help") {
       print_usage(argv[0]);
       return 0;
+    } else if (arg.rfind("--", 0) == 0) {
+      // Anything starting with -- that got this far is not a flag we know.
+      // These used to fall through to the positional list, so a removed flag
+      // like --keepalive was quietly taken as a media filename and reported as
+      // "not on device" -- an error about the wrong thing entirely.
+      std::cerr << "Unknown option: " << arg << "\n";
+      print_usage(argv[0]);
+      return 1;
     } else if (command.empty()) {
       command = arg;
     } else {
