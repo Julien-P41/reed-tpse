@@ -35,6 +35,7 @@
 #include "reed/config.hpp"
 #include "reed/device.hpp"
 #include "reed/mapping.hpp"
+#include "reed/status_cache.hpp"
 #include "reed/sysinfo.hpp"
 #include "reed/wire.hpp"
 
@@ -292,8 +293,12 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   // does tell us the link is broken is the handshake, and the loop below
   // reconnects on that. Checking each send would add branches that could only
   // repeat what the next handshake already reports.
+  reed::DeviceInfo device_info;
+
   auto restore = [&](reed::Device& dev) {
-    if (!dev.handshake()) return false;
+    auto info = dev.handshake();
+    if (!info) return false;
+    device_info = *info;
     wait_for_ui(45);
 
     // One `config` frame carries temperature unit, panel power, sleep mode,
@@ -582,7 +587,12 @@ int cmd_daemon_start(const std::string& port, bool foreground,
             }
           }
         }
-        device->send_sysinfo(build_sysinfo(labels, metrics));
+        // Read the reply rather than discarding it: `STATE all` answers with
+        // the device's status, so publishing it costs no extra round trip and
+        // lets `status` and `info` work while the daemon holds the port.
+        if (auto seen = device->push_sysinfo(build_sysinfo(labels, metrics))) {
+          reed::StatusCache::publish(*seen, device_info);
+        }
       }
     }
   }

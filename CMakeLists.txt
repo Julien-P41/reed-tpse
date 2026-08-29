@@ -12,6 +12,7 @@ add_library(reed STATIC
     src/media.cpp
     src/config.cpp
     src/mapping.cpp
+    src/status_cache.cpp
     src/sysinfo.cpp
 )
 

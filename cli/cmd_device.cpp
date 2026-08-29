@@ -21,6 +21,7 @@
 #include "reed/adb.hpp"
 #include "reed/device.hpp"
 #include "reed/picojson.h"
+#include "reed/status_cache.hpp"
 
 struct PowerEvent {
   const char* alias;
@@ -43,6 +44,24 @@ static const char* lookup_power_event(const std::string& in) {
 }
 
 int cmd_info(const std::string& port, bool verbose) {
+  // Device identity does not change while the device is plugged in, so the
+  // daemon's snapshot is as good as a live read -- and it is the only one
+  // available while the daemon holds the port.
+  if (daemon_holds_port(port)) {
+    if (auto snap = reed::StatusCache::read();
+        snap && !snap->info.product_id.empty()) {
+      std::cout << "Device Information:\n"
+                << "  Product: " << snap->info.product_id << "\n"
+                << "  OS: " << snap->info.os << "\n"
+                << "  Serial: " << snap->info.serial << "\n"
+                << "  App: " << snap->info.app_version << "\n"
+                << "  Firmware: " << snap->info.firmware << "\n"
+                << "  Hardware: " << snap->info.hardware << "\n"
+                << "  (from the daemon)\n";
+      return 0;
+    }
+  }
+
   reed::Device device(port, verbose);
 
   if (!device.connect()) {
@@ -102,6 +121,29 @@ static void print_status(const reed::DeviceStatus& status) {
 
 int cmd_status(const std::string& port, bool json_output, int watch,
                       bool verbose) {
+  // The daemon holds the port exclusively, so a live read is impossible while
+  // it runs -- which is most of the time. It publishes what it last saw, and
+  // that is the same `STATE all` body this command would ask for, so read
+  // that instead of failing. Only for a one-shot: --watch wants live values,
+  // and a cache cannot provide them.
+  if (watch == 0 && daemon_holds_port(port)) {
+    if (auto snap = reed::StatusCache::read()) {
+      if (json_output) {
+        std::cout << "{\"fanLCD\":\"" << snap->status.fan_lcd
+                  << "\",\"turboPump\":\"" << snap->status.turbo_pump
+                  << "\",\"availableStorage\":" << std::fixed
+                  << std::setprecision(0) << snap->status.available_storage
+                  << std::defaultfloat
+                  << ",\"ageSeconds\":" << snap->age_seconds() << "}\n";
+      } else {
+        print_status(snap->status);
+        std::cout << "  (from the daemon, " << snap->age_seconds()
+                  << "s ago)\n";
+      }
+      return 0;
+    }
+  }
+
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";

@@ -82,9 +82,6 @@ Open:
       of the vendor app that exposes the toggle.
 - [ ] Network throughput (the `PcInfo` blob already carries it; nothing
       collects it host-side)
-- [ ] `status` and `info` cannot run while the daemon holds the port. They are
-      reads, so failing is avoidable -- the daemon would have to expose its
-      last `STATE all` over a socket or a file.
 - [ ] Custom overlay layouts. The firmware places metrics itself: three at
       most, mid-height, with only `align` (Left/Center/Right) under host
       control. Anything else means compositing frames host-side.
@@ -93,7 +90,9 @@ Done in this fork: `status`, `raw`, `fan` (vendor tiers, arbitrary duty and
 Smart Mode curves), `screen`, `rotate`, `preset`, `sleep-display`, `filter`,
 `power` (all seven events, including suspend/resume), playlists and Screen
 Splitting with independent per-zone overlays, the full HUD metric set, the
-one-frame `config` apply, frame CRC/length validation, payload tests against
+one-frame `config` apply, `status`/`info` answering from the daemon's
+published snapshot while it holds the port, frame CRC/length validation,
+payload tests against
 captured vendor traffic, exclusive port locking, the system/user unit split
 and a udev rule.
 

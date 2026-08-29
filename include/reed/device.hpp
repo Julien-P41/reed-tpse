@@ -218,6 +218,15 @@ class Device {
   // Firmware renders up to 3 metrics from a fixed label set on top of the
   // configured media. Labels and the PcInfo shape are defined by the cooler.
   std::optional<Response> send_sysinfo(const std::vector<SysinfoData>& data);
+
+  // The same push, but reading the reply. `STATE all` is an exchange: the
+  // host's telemetry goes up and the device's status comes back on it, which
+  // is why the vendor never needs a separate status read. The daemon uses
+  // this so it can publish what it saw without costing an extra round trip.
+  std::optional<DeviceStatus> push_sysinfo(const std::vector<SysinfoData>& data);
+
+  // The PcInfo JSON both of the above send.
+  std::string sysinfo_body(const std::vector<SysinfoData>& data);
   // No set_sysinfo_display: `POST sysinfoDisplay {"items":[...]}` is accepted
   // by the firmware but KANALI never sends it, and it cannot carry colour or
   // badges. The overlay goes out through set_overlay instead.

@@ -446,15 +446,12 @@ std::optional<Response> Device::send_command(const std::string& request_state,
 }
 
 
-std::optional<DeviceStatus> Device::get_status() {
-  auto response = send_command("STATE", "all", "");
+namespace {
 
-  if (!response || !response->json) {
-    return std::nullopt;
-  }
-
+// The status body the device returns on a `STATE all` exchange. Shared by the
+// bare read and by the telemetry push, which gets the same body back.
+std::optional<DeviceStatus> status_from(const picojson::value& j) {
   DeviceStatus status;
-  const auto& j = *response->json;
 
   if (has_key(j, "status")) {
     const auto& s = get_value(j, "status");
@@ -484,6 +481,14 @@ std::optional<DeviceStatus> Device::get_status() {
   }
 
   return status;
+}
+
+}  // namespace
+
+std::optional<DeviceStatus> Device::get_status() {
+  auto response = send_command("STATE", "all", "");
+  if (!response || !response->json) return std::nullopt;
+  return status_from(*response->json);
 }
 
 std::optional<DeviceInfo> Device::handshake() {
@@ -716,7 +721,7 @@ std::optional<Response> Device::set_screen_power(bool enable) {
                       picojson::value(obj).serialize());
 }
 
-std::optional<Response> Device::send_sysinfo(
+std::string Device::sysinfo_body(
     const std::vector<SysinfoData>& data) {
   picojson::object cpu, gpu, memory, motherboard, disk, network;
   picojson::array fans;
@@ -810,11 +815,30 @@ std::optional<Response> Device::send_sysinfo(
           std::chrono::system_clock::now().time_since_epoch())
           .count()));
 
-  std::string content = picojson::value(pc_info).serialize();
-  // STATE, not POST: the vendor pushes its telemetry as a `STATE all` request
-  // body and gets the device's status back on the same exchange, which is why
-  // it never needs a separate read. Both verbs are accepted here.
-  return send_command("STATE", "all", content, false);
+  return picojson::value(pc_info).serialize();
+}
+
+// STATE, not POST: the vendor pushes its telemetry as a `STATE all` request
+// body and gets the device's status back on the same exchange, which is why it
+// never needs a separate read. Both verbs are accepted here.
+//
+// This one discards the reply, which is right for the common case -- the HUD
+// does not care what came back. push_sysinfo() is the same frame with the
+// answer read.
+std::optional<Response> Device::send_sysinfo(
+    const std::vector<SysinfoData>& data) {
+  return send_command("STATE", "all", sysinfo_body(data), false);
+}
+
+std::optional<DeviceStatus> Device::push_sysinfo(
+    const std::vector<SysinfoData>& data) {
+  // Identical frame to send_sysinfo, but waiting for the answer. Kept as a
+  // separate entry point rather than a flag so the fire-and-forget path stays
+  // the obvious default -- a caller that does not need the status should not
+  // pay for a reply it will discard.
+  auto response = send_command("STATE", "all", sysinfo_body(data));
+  if (!response || !response->json) return std::nullopt;
+  return status_from(*response->json);
 }
 
 std::optional<Response> Device::set_overlay(
