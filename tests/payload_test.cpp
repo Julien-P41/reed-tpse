@@ -347,6 +347,30 @@ int main() {
           frame.find("\"sysinfoDisplay\":[[],[]]") != std::string::npos);
   }
 
+  // A saved preset must produce the vendor's preset frame, not "Customization"
+  // with the media blanked. Selecting a preset clears the saved media, so the
+  // custom form would tell the device to show media that is not there.
+  std::puts("saved preset -> payload:");
+  {
+    reed::DisplayState st;
+    st.preset = "Cyber Bunker";
+    st.media.clear();
+    st.hud.enabled = true;
+    st.hud.metrics = {"CPU Temperature"};
+    st.hud.color = "000000";
+    st.hud.align = "Left";
+
+    const std::string frame =
+        reed::payload::screen_config(reed::screen_config_from(st));
+    same("preset frame, vendor shape", frame,
+         R"({"id":"Pre-set 1: Cyber Bunker",)"
+         R"("settings":{"color":"#000000","align":"Left",)"
+         R"("filter":{"value":null,"opacity":100},"badges":[]},)"
+         R"("sysinfoDisplay":["CPU Temperature"]})");
+    check("no empty media list", frame.find("\"media\"") == std::string::npos);
+    check("no screenMode", frame.find("screenMode") == std::string::npos);
+  }
+
   std::printf("%s\n", failures ? "FAILURES" : "all checks passed");
   return failures != 0;
 }

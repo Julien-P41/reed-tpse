@@ -81,6 +81,12 @@ struct ScreenConfig {
   // sends `settings` as a two-element array and `sysinfoDisplay` as an array
   // of two arrays -- left zone, then right -- and drops `ratio` entirely.
   // `media` stays flat, one entry per zone.
+  // A firmware preset instead of custom media. When set, the payload is the
+  // preset form the vendor sends -- id, settings and metrics only, with no
+  // media, screenMode, ratio or playMode. Leaving it empty gives the custom
+  // media form.
+  std::string preset_id;
+
   bool split = false;
   DisplaySettings split_settings_right;
   std::vector<std::string> split_sysinfo_right;

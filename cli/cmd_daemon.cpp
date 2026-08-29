@@ -231,6 +231,9 @@ int cmd_daemon_start(const std::string& port, bool foreground,
     actual_port = *detected;
   }
 
+  // Point adb at the same physical cooler as the serial port we settled on.
+  reed::Adb::bind_to_port(actual_port);
+
   bool report_ac = !config || config->report_ac_power;
   bool report_lock = !config || config->report_lock;
   bool report_shutdown = !config || config->report_shutdown;

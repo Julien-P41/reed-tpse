@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <iostream>
+#include <filesystem>
 #include <sstream>
 #include <vector>
 
@@ -102,6 +103,40 @@ std::optional<std::string> Adb::run_command(
   return result;
 }
 
+namespace {
+
+// The USB port a tty hangs off, e.g. "1-11" for /dev/ttyACM0. Empty when the
+// path is not a USB tty (a pty in a test, say).
+std::string usb_port_for_tty(const std::string& tty_path) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+
+  fs::path dev = fs::canonical(tty_path, ec);
+  if (ec) return {};
+  const std::string name = dev.filename().string();
+
+  fs::path link = fs::canonical("/sys/class/tty/" + name + "/device", ec);
+  if (ec) return {};
+
+  // .../usb1/1-11/1-11:1.0 -- the interface is the leaf, its parent is the
+  // device, and that directory name is what adb prints.
+  const std::string iface = link.filename().string();
+  const size_t colon = iface.find(':');
+  if (colon == std::string::npos) return {};
+  return iface.substr(0, colon);
+}
+
+std::string& bound_usb_port() {
+  static std::string port;
+  return port;
+}
+
+}  // namespace
+
+void Adb::bind_to_port(const std::string& tty_path) {
+  bound_usb_port() = usb_port_for_tty(tty_path);
+}
+
 // The serial of the cooler, for `adb -s`.
 //
 // Without this every adb call is ambiguous the moment a second device is
@@ -136,7 +171,17 @@ static std::optional<std::string> target_serial() {
     const std::string id = line.substr(0, tab);
     if (id.empty() || id == "List") continue;
     online.push_back(id);
-    if (line.find(std::string("product:") + kProduct) != std::string::npos) {
+
+    // Strongest match first: the adb device on the same USB port as the serial
+    // port in use. That is the same physical cooler by construction.
+    const std::string& want = bound_usb_port();
+    if (!want.empty() &&
+        line.find("usb:" + want) != std::string::npos) {
+      serial = id;
+      return serial;
+    }
+    if (want.empty() &&
+        line.find(std::string("product:") + kProduct) != std::string::npos) {
       serial = id;
       return serial;
     }

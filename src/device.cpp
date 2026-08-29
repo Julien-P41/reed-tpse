@@ -551,6 +551,19 @@ picojson::object screen_object(const ScreenConfig& config) {
   }
 
   picojson::object out;
+
+  // A preset is a different shape, not a variant with the media blanked. The
+  // vendor's frame carries the preset id, settings and metrics and nothing
+  // else. Sending kCustomization with an empty media list -- which is what a
+  // preset used to produce, because selecting one clears the saved media --
+  // tells the device to show custom media that is not there.
+  if (!config.preset_id.empty()) {
+    out["id"] = picojson::value(config.preset_id);
+    out["settings"] = picojson::value(settings_object(config.settings));
+    out["sysinfoDisplay"] = picojson::value(sysinfo_arr);
+    return out;
+  }
+
   // No "Type" key: that was ours. KANALI sends `id` alone to pick between
   // custom media (wire::kCustomization) and a preset ("Pre-set N: Name").
   out["id"] = picojson::value(wire::kCustomization);

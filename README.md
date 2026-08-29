@@ -128,6 +128,7 @@ Everything else upstream accepts still works, with the same defaults.
 | this file | installing, and what each command does |
 | [docs/vendor-protocol.md](docs/vendor-protocol.md) | the wire protocol, from captured vendor traffic -- authoritative on payloads |
 | [docs/firmware-notes.md](docs/firmware-notes.md) | how the firmware behaves: the startup race, what persists, what it ignores |
+| [docs/multi-cooler.md](docs/multi-cooler.md) | what assumes a single cooler, and what supporting two would take |
 
 ## Requirements
 

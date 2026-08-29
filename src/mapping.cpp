@@ -17,6 +17,9 @@ DisplaySettings settings_from(const HudConfig& hud, const std::string& filter,
 
 ScreenConfig screen_config_from(const DisplayState& state) {
   ScreenConfig cfg;
+  if (state.preset) {
+    cfg.preset_id = std::string(wire::kPresetPrefix) + *state.preset;
+  }
   cfg.media = state.media;
   cfg.ratio = state.ratio;
   cfg.screen_mode = state.screen_mode;

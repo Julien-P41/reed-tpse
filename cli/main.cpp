@@ -18,6 +18,8 @@
 #include "reed/config.hpp"
 #include "reed/device.hpp"
 #include "cli_common.hpp"
+
+#include "reed/adb.hpp"
 #include "cli_commands.hpp"
 
 #include <set>
@@ -346,6 +348,12 @@ int main(int argc, char* argv[]) {
       }
     }
   }
+
+  // Point adb at the same physical cooler as the serial port in use, whether
+  // that came from --port, config.json or auto-detection. Harmless when the
+  // command touches no serial port at all -- the binding is only consulted
+  // when adb has to choose between devices.
+  if (!port.empty()) reed::Adb::bind_to_port(port);
 
   if (command == "info") {
     return cmd_info(port, verbose);
