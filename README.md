@@ -144,24 +144,56 @@ Everything else upstream accepts still works, with the same defaults.
 - User must be in `uucp` group (Arch) or `dialout` (Debian/Ubuntu) for serial access
 - Or run with sudo
 
-## Build
+## Build and install
+
+`make install` installs the binary and nothing else. Everything that touches
+the system — a systemd unit, the udev rule, the suspend hook — is opt-in, so
+installing never silently enables a daemon or writes outside the prefix. Turn
+on what you want at configure time, in one go:
 
 ```bash
 cd reed-tpse
-mkdir build && cd build
-cmake ..
-make
-sudo make install
+cmake -S . -B build \
+    -DREED_SYSTEMD_SCOPE=user \
+    -DREED_INSTALL_UDEV=ON \
+    -DREED_INSTALL_SLEEP_HOOK=ON
+cmake --build build -j
+sudo cmake --install build
 ```
 
-### Installing the systemd unit
+| option | |
+|---|---|
+| `REED_SYSTEMD_SCOPE` | `user`, `system`, or `none` (the default) |
+| `REED_INSTALL_UDEV` | the stable `/dev/tryx-panorama` symlink |
+| `REED_INSTALL_SLEEP_HOOK` | tells the cooler about suspend and resume |
 
-`make install` deliberately installs **no** unit by default, so it never
-silently enables a daemon. Pick exactly one scope:
+Then enable it:
 
 ```bash
-cmake .. -DREED_SYSTEMD_SCOPE=user      # session-scoped, WantedBy=default.target
-cmake .. -DREED_SYSTEMD_SCOPE=system    # boot-scoped,  WantedBy=multi-user.target
+reed-tpse daemon start            # add --system for the system scope
+```
+
+⚠ The options are read at **configure** time, so adding one later means
+re-running the `cmake -S . -B build` line and installing again — a bare
+`sudo cmake --install build` will not pick it up. If you install the binary
+without a unit and then run `daemon start`, it says so rather than failing
+obscurely:
+
+```
+systemd service not installed in user scope. Run with --foreground,
+install the unit, or try --system.
+```
+
+Other options: `-DREED_SERVICE_USER=<name>` for the account the system unit
+runs as, `-DREED_BUILD_TESTS=ON` for the three hardware-free test binaries,
+and `-DCMAKE_INSTALL_PREFIX=<path>` if `/usr/local` is not where you want it —
+both units are templated on it.
+
+### Choosing a systemd scope
+
+```
+user    session-scoped, WantedBy=default.target       -- starts at login
+system  boot-scoped,    WantedBy=multi-user.target    -- starts at boot
 ```
 
 The two are **mutually exclusive**. The daemon holds `/dev/ttyACM0`
