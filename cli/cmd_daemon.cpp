@@ -590,7 +590,8 @@ int cmd_daemon_start(const std::string& port, bool foreground,
         // Read the reply rather than discarding it: `STATE all` answers with
         // the device's status, so publishing it costs no extra round trip and
         // lets `status` and `info` work while the daemon holds the port.
-        if (auto seen = device->push_sysinfo(build_sysinfo(labels, metrics))) {
+        if (auto seen = device->push_sysinfo(build_sysinfo(labels, metrics),
+                                              metrics.network)) {
           reed::StatusCache::publish(*seen, device_info);
         }
       }

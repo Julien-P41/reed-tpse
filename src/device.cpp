@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -721,8 +722,8 @@ std::optional<Response> Device::set_screen_power(bool enable) {
                       picojson::value(obj).serialize());
 }
 
-std::string Device::sysinfo_body(
-    const std::vector<SysinfoData>& data) {
+std::string Device::sysinfo_body(const std::vector<SysinfoData>& data,
+                                 const NetworkMetrics& net) {
   picojson::object cpu, gpu, memory, motherboard, disk, network;
   picojson::array fans;
 
@@ -757,8 +758,14 @@ std::string Device::sysinfo_body(
   disk["readSpeed"] = picojson::value(0.0);
   disk["writeSpeed"] = picojson::value(0.0);
 
-  network["download"] = picojson::value(0.0);
-  network["upload"] = picojson::value(0.0);
+  // Real figures rather than the zeros this used to send. The vendor puts
+  // live values here -- captured traffic shows them moving -- so sending
+  // constants was the one part of the PcInfo blob that was knowingly wrong.
+  // Rounded at the boundary: the measurement keeps its precision internally,
+  // but captured vendor frames carry plain integers here and 902.61000000000001
+  // is not a number anything wants to parse.
+  network["download"] = picojson::value(std::round(net.download_kbps));
+  network["upload"] = picojson::value(std::round(net.upload_kbps));
 
   auto to_double = [](const std::string& s) -> double {
     try {
@@ -826,17 +833,17 @@ std::string Device::sysinfo_body(
 // does not care what came back. push_sysinfo() is the same frame with the
 // answer read.
 std::optional<Response> Device::send_sysinfo(
-    const std::vector<SysinfoData>& data) {
-  return send_command("STATE", "all", sysinfo_body(data), false);
+    const std::vector<SysinfoData>& data, const NetworkMetrics& net) {
+  return send_command("STATE", "all", sysinfo_body(data, net), false);
 }
 
 std::optional<DeviceStatus> Device::push_sysinfo(
-    const std::vector<SysinfoData>& data) {
+    const std::vector<SysinfoData>& data, const NetworkMetrics& net) {
   // Identical frame to send_sysinfo, but waiting for the answer. Kept as a
   // separate entry point rather than a flag so the fire-and-forget path stays
   // the obvious default -- a caller that does not need the status should not
   // pay for a reply it will discard.
-  auto response = send_command("STATE", "all", sysinfo_body(data));
+  auto response = send_command("STATE", "all", sysinfo_body(data, net));
   if (!response || !response->json) return std::nullopt;
   return status_from(*response->json);
 }

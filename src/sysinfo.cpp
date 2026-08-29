@@ -389,6 +389,63 @@ MemoryMetrics SystemMonitor::sample_memory() {
   return m;
 }
 
+// Throughput across every real interface, from /proc/net/dev.
+//
+// Loopback is excluded -- it is not network traffic in any sense a display
+// should report, and on a busy machine it dwarfs the real interfaces. Docker
+// and virtual bridges are left in: they carry traffic the user would recognise
+// as network activity, and filtering them by name would be guesswork.
+NetworkMetrics SystemMonitor::sample_network() {
+  NetworkMetrics net;
+
+  std::ifstream f("/proc/net/dev");
+  if (!f) return net;
+
+  int64_t rx_total = 0, tx_total = 0;
+  std::string line;
+  std::getline(f, line);  // two header lines
+  std::getline(f, line);
+  while (std::getline(f, line)) {
+    const auto colon = line.find(':');
+    if (colon == std::string::npos) continue;
+
+    std::string name = line.substr(0, colon);
+    name.erase(0, name.find_first_not_of(" \t"));
+    if (name == "lo") continue;
+
+    std::istringstream fields(line.substr(colon + 1));
+    int64_t rx = 0, tx = 0;
+    // rx bytes is the 1st field, tx bytes the 9th.
+    int64_t discard = 0;
+    fields >> rx;
+    for (int i = 0; i < 7; ++i) fields >> discard;
+    fields >> tx;
+    if (!fields.fail()) {
+      rx_total += rx;
+      tx_total += tx;
+    }
+  }
+
+  const int64_t now_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count();
+
+  if (prev_net_rx_ >= 0 && now_us > prev_net_us_) {
+    const double seconds = static_cast<double>(now_us - prev_net_us_) / 1e6;
+    // Counters wrap and interfaces disappear; a negative delta is not traffic.
+    const double rx_delta = static_cast<double>(rx_total - prev_net_rx_);
+    const double tx_delta = static_cast<double>(tx_total - prev_net_tx_);
+    if (rx_delta >= 0) net.download_kbps = rx_delta / seconds / 1024.0;
+    if (tx_delta >= 0) net.upload_kbps = tx_delta / seconds / 1024.0;
+  }
+
+  prev_net_rx_ = rx_total;
+  prev_net_tx_ = tx_total;
+  prev_net_us_ = now_us;
+  return net;
+}
+
 SystemMetrics SystemMonitor::sample() {
   probe_hardware();
   SystemMetrics s;
@@ -397,6 +454,7 @@ SystemMetrics SystemMonitor::sample() {
   s.memory = sample_memory();
   s.motherboard = sample_motherboard();
   s.disk = sample_disk();
+  s.network = sample_network();
   return s;
 }
 

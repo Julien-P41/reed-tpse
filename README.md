@@ -80,8 +80,6 @@ Open:
       validate, so it never names its field in an exception, and KANALI 1.2.1
       has no UI control for it, so there is nothing to capture. Needs a build
       of the vendor app that exposes the toggle.
-- [ ] Network throughput (the `PcInfo` blob already carries it; nothing
-      collects it host-side)
 - [ ] Custom overlay layouts. The firmware places metrics itself: three at
       most, mid-height, with only `align` (Left/Center/Right) under host
       control. Anything else means compositing frames host-side.
@@ -90,7 +88,8 @@ Done in this fork: `status`, `raw`, `fan` (vendor tiers, arbitrary duty and
 Smart Mode curves), `screen`, `rotate`, `preset`, `sleep-display`, `filter`,
 `power` (all seven events, including suspend/resume), playlists and Screen
 Splitting with independent per-zone overlays, the full HUD metric set, the
-one-frame `config` apply, `status`/`info` answering from the daemon's
+one-frame `config` apply, real network throughput in the telemetry push,
+`status`/`info` answering from the daemon's
 published snapshot while it holds the port, frame CRC/length validation,
 payload tests against
 captured vendor traffic, exclusive port locking, the system/user unit split

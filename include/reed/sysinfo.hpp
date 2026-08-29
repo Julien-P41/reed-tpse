@@ -38,6 +38,18 @@ struct MotherboardMetrics {
   std::optional<double> temperature_c;  // super-I/O SYSTIN
 };
 
+// Throughput since the previous sample, in KB/s.
+//
+// The unit is inferred, not measured: the PcInfo blob carries bare numbers and
+// captured vendor traffic showed small integers (0-7) on an idle machine,
+// which fits KB/s and not much else. Nothing in this project has seen the
+// device display them, so if a layout ever does show network figures and they
+// read wrong, this is the first thing to suspect.
+struct NetworkMetrics {
+  double upload_kbps = 0;
+  double download_kbps = 0;
+};
+
 struct DiskMetrics {
   std::optional<double> temperature_c;  // nvme or drivetemp hwmon
 };
@@ -48,6 +60,7 @@ struct SystemMetrics {
   MemoryMetrics memory;
   MotherboardMetrics motherboard;
   DiskMetrics disk;
+  NetworkMetrics network;
 };
 
 // Collects CPU/GPU/memory telemetry from Linux sysfs, /proc, and nvidia-smi.
@@ -66,6 +79,15 @@ class SystemMonitor {
 
  private:
   enum class GpuBackend { None, Nvidia, Amd };
+
+  // Byte counters from the previous sample, for the throughput delta. -1 marks
+  // "no previous sample", so the first call reports zero rather than the
+  // machine's traffic since boot.
+  NetworkMetrics sample_network();
+
+  int64_t prev_net_rx_ = -1;
+  int64_t prev_net_tx_ = -1;
+  int64_t prev_net_us_ = 0;
 
   int64_t prev_cpu_idle_ = 0;
   int64_t prev_cpu_total_ = 0;
