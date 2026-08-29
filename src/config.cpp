@@ -135,9 +135,14 @@ std::optional<Config> ConfigManager::load_config(LoadStatus* status) {
   };
   std::string path = get_config_path();
 
-  if (!fs::exists(path)) {
-    report(LoadStatus::Missing);
-    return Config{};
+  // error_code overload: the throwing one terminates the process on a path it
+  // cannot stat. Running as a user without access to the config directory --
+  // a boot script with the wrong SERVICE_USER, say -- printed a raw
+  // std::filesystem_error and aborted instead of saying what was wrong.
+  std::error_code ec;
+  if (!fs::exists(path, ec) || ec) {
+    report(ec ? LoadStatus::Unreadable : LoadStatus::Missing);
+    return ec ? std::optional<Config>{} : std::optional<Config>{Config{}};
   }
 
   std::ifstream file(path);
@@ -208,8 +213,9 @@ std::optional<DisplayState> ConfigManager::load_state(LoadStatus* status) {
   };
   std::string path = get_state_path();
 
-  if (!fs::exists(path)) {
-    report(LoadStatus::Missing);
+  std::error_code ec;
+  if (!fs::exists(path, ec) || ec) {
+    report(ec ? LoadStatus::Unreadable : LoadStatus::Missing);
     return std::nullopt;
   }
 
