@@ -486,6 +486,10 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   auto reapply_at = clock::now() + std::chrono::seconds(25);
   bool reapplied = false;
 
+  // The lock poll runs on the keepalive cadence, not on the loop's 1s tick.
+  // Starting at `now` makes the first check immediate.
+  auto next_lock_check = now;
+
   // When the snapshot was last written, so the two publishers do not duplicate
   // each other's work. Unset means "never", which makes the first tick publish.
   std::optional<clock::time_point> last_publish;
@@ -600,9 +604,22 @@ int cmd_daemon_start(const std::string& port, bool foreground,
       }
     }
 
-    if (report_lock) {
-      // Cheap enough on the keepalive cadence, and it avoids needing a session
-      // bus -- a system-scope daemon has no session of its own.
+    if (report_lock && now >= next_lock_check) {
+      next_lock_check = now + std::chrono::seconds(keepalive_interval);
+      // On the keepalive cadence, which is what the comment here always
+      // claimed. It was not: this sat bare in the loop body, whose only pacing
+      // is the 1s sleep, so every other periodic action was behind a deadline
+      // and this one ran every second -- two loginctl forks a second, roughly
+      // 170k processes a day, to answer a question that changes a handful of
+      // times.
+      //
+      // The cost is latency: a lock or unlock is now noticed within
+      // keepalive_interval rather than within a second. For a decorative panel
+      // that is a fair trade; if it ever is not, cache the answer and re-run
+      // loginctl on the deadline rather than reverting to a 1s poll.
+      //
+      // Polling at all avoids needing a session bus -- a system-scope daemon
+      // has no session of its own.
       if (auto locked = session_locked()) {
         if (!last_locked || *last_locked != *locked) {
           if (last_locked && device->is_connected()) {
