@@ -28,6 +28,24 @@
 #ifndef picojson_h
 #define picojson_h
 
+/* LOCAL MODIFICATION, not upstream picojson.
+ *
+ * GCC's -Wmaybe-uninitialized fires inside value's copy constructor once it is
+ * inlined into the array and object parse paths, which only happens with
+ * optimisation on. It is the usual false positive over a tagged union: the
+ * branch that copies u_ is guarded by type_, and GCC cannot see that.
+ *
+ * Suppressed here, around vendored code we do not maintain, rather than
+ * project-wide -- the same warning still applies to everything we write. The
+ * whole file is wrapped, and the pop is at the bottom.
+ *
+ * Remove this if picojson is ever updated to a version that does not trip it.
+ */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -1080,6 +1098,10 @@ inline std::ostream& operator<<(std::ostream& os, const picojson::value& x) {
 }
 #ifdef _MSC_VER
 #pragma warning(pop)
+#endif
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
 #endif
 
 #endif

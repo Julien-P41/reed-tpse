@@ -185,7 +185,13 @@ install the unit, or try --system.
 Other options: `-DREED_SERVICE_USER=<name>` for the account the system unit
 runs as, `-DREED_BUILD_TESTS=ON` for the three hardware-free test binaries,
 and `-DCMAKE_INSTALL_PREFIX=<path>` if `/usr/local` is not where you want it —
-both units are templated on it.
+both units and the sleep hook are templated on it.
+
+The build type defaults to `RelWithDebInfo` when you do not set one. It used to
+default to nothing at all, which is not the same as a release build: CMake then
+passes no optimisation flag, so every install following the block above shipped
+an unoptimised binary. Pass `-DCMAKE_BUILD_TYPE=Release` for `-O3` without
+debug info, or `Debug` while working on it.
 
 ### Choosing a systemd scope
 

@@ -5,6 +5,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# A default build type, because there was none and nothing in the README set
+# one. CMake then passes no optimisation flag at all, so every documented
+# install shipped an -O0 binary, and the optimiser-only warnings -- the
+# -Wmaybe-uninitialized family -- never ran over this code at all.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
+        "Build type: Debug, Release, RelWithDebInfo, MinSizeRel" FORCE)
+    message(STATUS "No CMAKE_BUILD_TYPE given; defaulting to RelWithDebInfo")
+endif()
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+             Debug Release RelWithDebInfo MinSizeRel)
+
 add_library(reed STATIC
     src/protocol.cpp
     src/device.cpp
@@ -21,11 +33,11 @@ target_include_directories(reed PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-target_compile_options(reed PRIVATE
-    -Wall -Wextra -Wpedantic
-    $<$<CONFIG:Release>:-O2>
-    $<$<CONFIG:Debug>:-g -O0>
-)
+# Warnings only. Optimisation and debug info come from CMAKE_CXX_FLAGS_<CONFIG>,
+# which CMake already sets per build type -- the explicit -O2 here was appended
+# after CMake's own -O3 in Release and silently won, so `-DCMAKE_BUILD_TYPE=Release`
+# produced a less optimised binary than it asked for.
+target_compile_options(reed PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(reed-tpse
     cli/main.cpp
@@ -38,11 +50,7 @@ add_executable(reed-tpse
 )
 target_link_libraries(reed-tpse PRIVATE reed)
 
-target_compile_options(reed-tpse PRIVATE
-    -Wall -Wextra -Wpedantic
-    $<$<CONFIG:Release>:-O2>
-    $<$<CONFIG:Debug>:-g -O0>
-)
+target_compile_options(reed-tpse PRIVATE -Wall -Wextra -Wpedantic)
 
 # udev rule. Not installed under CMAKE_INSTALL_PREFIX, because udev does not
 # read /usr/local/lib/udev/rules.d -- installing there would look successful and

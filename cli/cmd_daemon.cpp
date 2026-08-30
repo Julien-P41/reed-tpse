@@ -163,8 +163,31 @@ static std::optional<reed::DisplayState> bootstrap_display_state() {
 int cmd_daemon_start(const std::string& port, bool foreground,
                             bool system_scope, bool verbose) {
   if (!foreground) {
+    // Neither --port nor --verbose reaches a unit started through systemd:
+    // the unit file fixes the command line, and this process only asks
+    // systemctl to start it. Silently accepting them looked like they applied.
+    if (!port.empty()) {
+      std::cerr << "note: --port is ignored when starting through systemd -- "
+                   "the unit\n"
+                   "      runs its own command line. Set \"port\" in "
+                   "config.json instead,\n"
+                   "      or use --foreground.\n";
+    }
+    if (verbose) {
+      std::cerr << "note: --verbose applies to the daemon process, not to "
+                   "systemctl; use\n"
+                   "      --foreground to see it, or `journalctl -u "
+                   "reed-tpse.service`.\n";
+    }
     const std::string sc = systemctl(system_scope);
-    std::system((sc + " enable reed-tpse.service 2>/dev/null").c_str());
+    // Best effort, and the result is deliberately not acted on: `enable` fails
+    // legitimately when the unit is already enabled or not installed, and the
+    // `start` below is what decides the outcome. Consumed explicitly because
+    // std::system is warn_unused_result -- a warning that only appears once
+    // optimisation is on, which until now no documented build turned on.
+    const int enable_rc =
+        std::system((sc + " enable reed-tpse.service 2>/dev/null").c_str());
+    (void)enable_rc;
     int ret = std::system((sc + " start reed-tpse.service 2>/dev/null").c_str());
 
     if (ret == 0) {
