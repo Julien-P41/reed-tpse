@@ -56,8 +56,19 @@ int cmd_info(const std::string& port, bool verbose) {
                 << "  Serial: " << snap->info.serial << "\n"
                 << "  App: " << snap->info.app_version << "\n"
                 << "  Firmware: " << snap->info.firmware << "\n"
-                << "  Hardware: " << snap->info.hardware << "\n"
-                << "  (from the daemon)\n";
+                << "  Hardware: " << snap->info.hardware << "\n";
+      // Say how old it is. Printing a bare "(from the daemon)" made a snapshot
+      // from an hour ago read exactly like one from a second ago.
+      const long long age = snap->age_seconds();
+      std::cout << "  (from the daemon, " << age << "s ago)\n";
+      if (reed::StatusSnapshot::stale_at(age)) {
+        // Identity does not change while a device is plugged in, so this is
+        // still the best answer available -- but the daemon has stopped
+        // hearing from the cooler, and that is worth saying out loud.
+        std::cerr << "  ⚠ The daemon has not had an answer from the device for "
+                  << age
+                  << "s. This identity is the last one it saw.\n";
+      }
       return 0;
     }
   }
@@ -128,19 +139,57 @@ int cmd_status(const std::string& port, bool json_output, int watch,
   // and a cache cannot provide them.
   if (watch == 0 && daemon_holds_port(port)) {
     if (auto snap = reed::StatusCache::read()) {
+      // The cached answer carries the same exit code as a live one.
+      //
+      // It used to return 0 whatever the device reported, while the live path
+      // below returned 2 on a fault. Since the cache is only consulted when
+      // the daemon holds the port -- the recommended setup -- a monitoring
+      // check built on the documented contract stopped detecting faults the
+      // moment the user followed the README.
+      //
+      // A stale snapshot is also a fault, and arguably the more urgent one:
+      // the daemon is running and no longer getting answers.
+      // One clock read, so the printed age and the staleness cannot disagree.
+      const long long age = snap->age_seconds();
+      const bool stale = reed::StatusSnapshot::stale_at(age);
+      const bool healthy = snap->status.healthy();
+
       if (json_output) {
-        std::cout << "{\"fanLCD\":\"" << snap->status.fan_lcd
-                  << "\",\"turboPump\":\"" << snap->status.turbo_pump
-                  << "\",\"availableStorage\":" << std::fixed
-                  << std::setprecision(0) << snap->status.available_storage
-                  << std::defaultfloat
-                  << ",\"ageSeconds\":" << snap->age_seconds() << "}\n";
+        // Same shape as the live path, plus the two fields only a cached read
+        // can report. Built with the JSON writer rather than concatenated, so
+        // a value containing a quote cannot produce unparseable output.
+        picojson::array warnings;
+        for (const auto& w : snap->status.warnings) {
+          picojson::object entry;
+          entry["description"] = picojson::value(w.description);
+          entry["type"] = picojson::value(w.type);
+          warnings.push_back(picojson::value(entry));
+        }
+
+        picojson::object out;
+        out["fanLCD"] = picojson::value(snap->status.fan_lcd);
+        out["turboPump"] = picojson::value(snap->status.turbo_pump);
+        out["availableStorage"] =
+            picojson::value(snap->status.available_storage);
+        out["warning"] = picojson::value(warnings);
+        out["healthy"] = picojson::value(healthy);
+        out["ageSeconds"] = picojson::value(static_cast<double>(age));
+        out["stale"] = picojson::value(stale);
+
+        std::cout << picojson::value(out).serialize() << std::endl;
       } else {
         print_status(snap->status);
-        std::cout << "  (from the daemon, " << snap->age_seconds()
-                  << "s ago)\n";
+        std::cout << "  (from the daemon, " << age << "s ago)\n";
       }
-      return 0;
+
+      if (stale) {
+        std::cerr << "Stale: the daemon holds the port but has had no answer "
+                     "from the device\n"
+                     "       for "
+                  << age
+                  << "s. The figures above are the last ones it saw.\n";
+      }
+      return (healthy && !stale) ? 0 : 2;
     }
   }
 
