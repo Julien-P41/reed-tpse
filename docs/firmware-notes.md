@@ -63,25 +63,39 @@ running.
 | `preset` | `display.json` | yes |
 | `fan` tier or duty | `display.json` | yes |
 | HUD metrics, layout, badges, unit | `display.json` | yes |
+| `filter` + `filter_opacity` | `display.json` | yes |
+| panel power (`screen on/off`) | `display.json` | yes |
 | `port`, `keepalive_interval` | `config.json` | n/a |
-| `power_auto` | `config.json` | yes |
-| `lock-display` media + brightness | `config.json` | yes |
+| `report_ac_power` / `report_lock` / `report_shutdown` | `config.json` | yes |
+| `lock_media`, `lock_brightness` (set by `lock-display`) | `config.json` | yes |
 
-⚠ There are two `brightness` values and they are not the same thing.
-`config.json` → `brightness` is only the **default for `display --brightness`**
-when the flag is omitted; the daemon never applies it. What actually reaches
-the panel is `display.json` → `brightness`, set by `reed-tpse brightness N` or
-by `display --brightness N`.
+⚠ There is only ONE `brightness`, in `display.json`. This table used to list a
+`config.json` → `brightness` as well, and describe it as the default for
+`display --brightness` when the flag was omitted. That key was removed: nothing
+honoured it -- it seeded a CLI default that was then gated away by whether
+`--brightness` was given, so the value reaching the device was always either the
+flag or the stored state. A config file with one in it is ignored, and the next
+command that writes the file drops it. See the warning in the README's
+Configuration section.
 
 `display` without `--brightness` leaves the stored brightness alone. It used to
 overwrite it with the config default, so any `brightness N` was quietly undone
 the next time the media changed.
 
+⚠ `power_auto` is gone too, split into the three `report_*` keys above. It was
+one flag covering three unrelated behaviours, and bundling them caused a real
+bug: with `lock_media` configured, the branch that would have sent the unlock
+event was skipped along with the lock event, so the panel stayed on the sticky
+standby across a daemon restart. An existing `power_auto` is still honoured as
+the default for all three, so an old config that switched the behaviour off
+keeps it off.
+
 Not persisted, by design: `raw`, and one-shot `power` events -- those describe a
 moment, not a state.
 
-The daemon re-reads both files when either changes, so edits apply without a
-restart.
+The daemon re-reads `config.json` and `display.json` when either changes, so
+edits apply without a restart. It also *writes* a third file, `status.json`,
+which it never reads back -- see the README's Configuration section.
 
 
 ## How it works
