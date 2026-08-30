@@ -250,8 +250,16 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
         }
       }
     } else if (a == "--interval") {
-      h.push_interval_sec = std::atoi(next("--interval").c_str());
-      if (h.push_interval_sec < 1) h.push_interval_sec = 1;
+      const std::string raw = next("--interval");
+      if (!parse_int(raw, &h.push_interval_sec) || h.push_interval_sec < 1 ||
+          h.push_interval_sec > 3600) {
+        // Bounded at both ends here, matching the daemon's own clamp. It only
+        // guarded the low end, so `--interval abc` silently became 1 and
+        // `--interval 999999` was stored and then quietly corrected at start.
+        std::cerr << "--interval must be a whole number of seconds, 1-3600 "
+                     "(got \"" << raw << "\")\n";
+        return 1;
+      }
     } else if (a == "--unit") {
       h.temperature_unit = next("--unit");
     } else if (a == "--cpu-name") {

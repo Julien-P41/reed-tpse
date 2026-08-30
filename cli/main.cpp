@@ -217,10 +217,28 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
 
-    if (arg == "-p" || arg == "--port") {
-      if (++i < argc) {
-        port = argv[i];
+    // Every value-taking flag reports a missing value. Three of them used to
+    // consume nothing and carry on with the previous value, so `-p` with a
+    // typo'd path silently used config.json's port instead.
+    auto need_value = [&](const char* flag) -> const char* {
+      if (++i >= argc) {
+        std::cerr << flag << " needs a value\n";
+        std::exit(1);
       }
+      return argv[i];
+    };
+    auto need_int = [&](const char* flag) -> int {
+      const std::string raw = need_value(flag);
+      int v = 0;
+      if (!parse_int(raw, &v)) {
+        std::cerr << flag << " needs a whole number (got \"" << raw << "\")\n";
+        std::exit(1);
+      }
+      return v;
+    };
+
+    if (arg == "-p" || arg == "--port") {
+      port = need_value("--port");
     } else if (arg == "-v" || arg == "--verbose") {
       verbose = true;
     } else if (arg == "--split") {
@@ -228,11 +246,7 @@ int main(int argc, char* argv[]) {
     } else if (arg == "--smart") {
       fan_smart = true;
     } else if (arg == "--opacity") {
-      if (i + 1 >= argc) {
-        std::cerr << "--opacity needs a value 0-100\n";
-        return 1;
-      }
-      filter_opacity = std::atoi(argv[++i]);
+      filter_opacity = need_int("--opacity");
       if (filter_opacity < 0 || filter_opacity > 100) {
         std::cerr << "--opacity must be 0-100\n";
         return 1;
@@ -265,12 +279,17 @@ int main(int argc, char* argv[]) {
         return 1;
       }
     } else if (arg == "--ratio") {
-      if (++i < argc) ratio = argv[i];
-    } else if (arg == "--brightness") {
-      if (++i < argc) {
-        brightness = std::atoi(argv[i]);
-        brightness_given = true;
+      // Validated like --play-mode and --align. It went to the wire unchecked,
+      // and the firmware silently ignores a value it does not recognise, so a
+      // typo produced a command that returned 200 and did nothing.
+      ratio = need_value("--ratio");
+      if (ratio != "2:1" && ratio != "1:1") {
+        std::cerr << "Unknown --ratio: \"" << ratio << "\"  (2:1 | 1:1)\n";
+        return 1;
       }
+    } else if (arg == "--brightness") {
+      brightness = need_int("--brightness");
+      brightness_given = true;
     } else if (arg == "--foreground") {
       foreground = true;
     } else if (arg == "--json") {
@@ -280,14 +299,26 @@ int main(int argc, char* argv[]) {
     } else if (arg == "--force") {
       force = true;
     } else if (arg == "--profile") {
-      if (++i < argc) fan_profile = argv[i];
+      fan_profile = need_value("--profile");
     } else if (arg == "--speed") {
-      if (++i < argc) fan_speed = std::atoi(argv[i]);
+      fan_speed = need_int("--speed");
     } else if (arg == "--watch") {
-      if (++i < argc) watch = std::atoi(argv[i]);
+      watch = need_int("--watch");
+      if (watch < 0) {
+        std::cerr << "--watch must be a positive number of seconds\n";
+        return 1;
+      }
     } else if (arg == "-h" || arg == "--help") {
       print_usage(argv[0]);
       return 0;
+    } else if (command == "lock-display" &&
+               (arg == "--default" || arg == "--remove")) {
+      // Command-scoped, handled inside cmd_lock_display. Without this the
+      // guard below rejects them -- so `lock-display --default`, which is in
+      // --help and in the README, has never worked, and the code in
+      // cmd_lock_display that handles it was unreachable. Only the undashed
+      // `default` spelling got through.
+      args.push_back(arg);
     } else if (arg.rfind("--", 0) == 0) {
       // Anything starting with -- that got this far is not a flag we know.
       // These used to fall through to the positional list, so a removed flag
@@ -404,7 +435,13 @@ int main(int argc, char* argv[]) {
       std::cerr << "Usage: reed-tpse brightness <0-100>\n";
       return 1;
     }
-    return cmd_brightness(port, std::atoi(args[0].c_str()), verbose);
+    int level = 0;
+    if (!parse_int(args[0], &level)) {
+      std::cerr << "brightness needs a whole number 0-100 (got \"" << args[0]
+                << "\")\n";
+      return 1;
+    }
+    return cmd_brightness(port, level, verbose);
   } else if (command == "list") {
     return cmd_list();
   } else if (command == "delete") {

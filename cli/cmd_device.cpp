@@ -324,7 +324,10 @@ int cmd_rotate(const std::string& port, const std::string& arg,
   } else if (arg == "mirror") {
     degree = 90;
   } else {
-    degree = std::atoi(arg.c_str());
+    if (!parse_int(arg, &degree)) {
+      std::cerr << "Usage: reed-tpse rotate <normal|mirror|0|90|180|270>\n";
+      return 1;
+    }
     if (degree != 0 && degree != 90 && degree != 180 && degree != 270) {
       std::cerr << "Usage: reed-tpse rotate <normal|mirror|0|90|180|270>\n";
       return 1;
