@@ -372,9 +372,26 @@ Storage:   2.65 GiB free
 Warnings:  Fan LCD: No ERROR
 ```
 
-Exit code is `2` if the device reports any warning whose description is not
-`No ERROR`, so it drops straight into a monitoring check. `status` does not
-send `conn`, so it will not disturb what is on screen.
+Exit codes, so it drops straight into a monitoring check:
+
+| | |
+|---|---|
+| `0` | the device answered and reports no fault |
+| `2` | a warning whose description is not `No ERROR`, **or** the daemon holds the port and its last look at the device is more than 180s old -- a daemon that is up and no longer getting answers is the more urgent of the two |
+| `1` | no answer at all: no device, or something else holds the port and there is no snapshot to fall back on |
+
+`status` does not send `conn`, so it will not disturb what is on screen.
+
+While the daemon holds the port, `status` answers from the snapshot it
+publishes rather than failing, and says how old that snapshot is:
+
+```
+Warnings:  Fan LCD: No ERROR
+  (from the daemon, 3s ago)
+```
+
+`--json` carries the same fields as a live read plus `ageSeconds` and `stale`.
+`--watch` always reads the device directly, so it needs the port to itself.
 
 ### Fan (LCD / pump-head fan)
 
@@ -809,7 +826,8 @@ alongside the media state, so it survives reboots.
 
 ## Configuration
 
-Two files, with different jobs.
+Three files, with different jobs. You write the first; the tool writes the
+other two.
 
 **`~/.config/reed-tpse/config.json`** -- things you set once:
 
@@ -841,10 +859,32 @@ tool's default rather than left alone, so reed-tpse will overwrite another
 program touching the same panel every time it reconnects.
 
 **`~/.local/state/reed-tpse/display.json`** -- what the daemon re-applies on
-every connect: media, brightness, ratio, play mode, screen mode, filter and its
-opacity, panel power, sleep behaviour, fan tier and duty, and both HUD zones
-(`hud` and `hud_right`). Written by the commands, not meant to be hand-edited,
-though nothing stops you.
+every connect: media or preset, brightness, ratio, play mode, screen mode,
+filter and its opacity, panel power, sleep behaviour, fan tier and duty, and
+both HUD zones (`hud` and `hud_right`). Written by the commands, not meant to
+be hand-edited, though nothing stops you.
+
+**`~/.local/state/reed-tpse/status.json`** -- the daemon's last look at the
+device: fan and pump RPM, warnings, free storage, and the identity from the
+handshake, with the time it was taken.
+
+It exists because the daemon holds the serial port exclusively, so `status` and
+`info` -- both pure reads -- could not run at all while it was up, which is most
+of the time. The daemon writes what it saw and those two commands read it
+instead of the port.
+
+It is a cache, not a channel: nothing is sent back, and a missing file is never
+an error. The daemon refreshes it at least once per `keepalive_interval`, and
+more often than that when the HUD is pushing telemetry -- each push already
+reads the device's status back, so publishing it costs nothing extra. It is
+deleted on a clean exit. A snapshot older than 180s is reported as stale rather
+than passed off as current -- see [Status](#status). Nothing else reads it, and hand-editing it
+only changes what those two commands print until the next tick.
+
+It lives beside `display.json` rather than in `XDG_RUNTIME_DIR`, which would
+otherwise be the tidier home: a system-scope unit gets no `XDG_RUNTIME_DIR`
+while an interactive shell has one, so the daemon would publish to one path and
+the CLI look in another, both working perfectly and never meeting.
 
 ## Architecture
 
