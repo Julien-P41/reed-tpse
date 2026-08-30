@@ -1,0 +1,45 @@
+# Build the project and run the hardware-free checks.
+#
+# The suite is 91 assertions across three binaries -- frame protocol, config
+# round-trips, and payload shapes compared against captured vendor traffic.
+# None of it touches a device, so it runs anywhere. It was off by default and
+# nothing ran it, which for a project whose commit log is largely "here is a
+# wire bug that looked like success" was the cheapest insurance left unbought.
+name: build and test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DREED_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # The sleep hook is a shipped script and CMake only substitutes into it,
+      # so a syntax error would reach users unbuilt and unrun. The @...@
+      # placeholders are ordinary text to the shell, so the template parses as
+      # it stands.
+      - name: Check the sleep hook parses
+        run: sh -n systemd/reed-tpse-sleep.in
+
+      # Not warning-free-as-a-gate: a newer GCC than this runner's can invent
+      # new warnings and turn the build red for something nobody changed. This
+      # reports them so a regression is visible in the log without blocking.
+      - name: Report compiler warnings
+        run: |
+          cmake -S . -B warnbuild -DREED_BUILD_TESTS=ON
+          cmake --build warnbuild -j 2>&1 | tee out.txt
+          echo "warning lines: $(grep -c 'warning:' out.txt || true)"
