@@ -413,6 +413,21 @@ NetworkMetrics SystemMonitor::sample_network() {
     name.erase(0, name.find_first_not_of(" \t"));
     if (name == "lo") continue;
 
+    // Skip interfaces enslaved to a bridge. Their traffic is counted again on
+    // the bridge itself, so summing both reported roughly double on any host
+    // running docker or a VM bridge -- every byte crossing docker0 also
+    // crosses the veth behind it. Keeping the bridge and dropping its ports is
+    // the arbitrary half of the choice; not double counting is the point.
+    //
+    // sysfs is the test rather than the name: filtering on "veth"/"docker"
+    // prefixes would be guesswork, and this is what the kernel actually knows.
+    {
+      std::error_code brec;
+      if (fs::exists("/sys/class/net/" + name + "/brport", brec) && !brec) {
+        continue;
+      }
+    }
+
     std::istringstream fields(line.substr(colon + 1));
     int64_t rx = 0, tx = 0;
     // rx bytes is the 1st field, tx bytes the 9th.
