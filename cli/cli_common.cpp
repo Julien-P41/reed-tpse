@@ -1,5 +1,7 @@
 #include "cli_common.hpp"
 
+#include "reed/hud.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <climits>
@@ -21,10 +23,15 @@ void signal_handler(int sig) {
 }
 
 // Build the SysinfoData payload the device expects for the given labels.
+//
+// Value, unit and precision all come from the one metric table in
+// reed/hud.hpp. This was a fifteen-branch if/else chain that had to agree with
+// the accept list in cmd_hud.cpp, the PcInfo mapping in device.cpp and the
+// --help text, by hand.
 std::vector<reed::SysinfoData> build_sysinfo(
     const std::vector<std::string>& labels, const reed::SystemMetrics& m) {
   std::vector<reed::SysinfoData> out;
-  auto fmt = [](double v, int precision = 0) {
+  auto fmt = [](double v, int precision) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.*f", precision, v);
     return std::string(buf);
@@ -32,51 +39,13 @@ std::vector<reed::SysinfoData> build_sysinfo(
   for (const auto& label : labels) {
     reed::SysinfoData d;
     d.label = label;
-    if (label == "CPU Temperature") {
-      d.value = fmt(m.cpu.temperature_c);
-      d.unit = "°C";
-    } else if (label == "CPU Frequency") {
-      d.value = fmt(m.cpu.frequency_mhz);
-      d.unit = "MHz";
-    } else if (label == "CPU Usage") {
-      d.value = fmt(m.cpu.usage_percent, 1);
-      d.unit = "%";
-    } else if (label == "GPU Temperature") {
-      d.value = fmt(m.gpu.temperature_c);
-      d.unit = "°C";
-    } else if (label == "GPU Frequency") {
-      d.value = fmt(m.gpu.frequency_mhz);
-      d.unit = "MHz";
-    } else if (label == "GPU Usage") {
-      d.value = fmt(m.gpu.usage_percent);
-      d.unit = "%";
-    } else if (label == "GPU Voltage") {
-      d.value = fmt(m.gpu.voltage_v, 3);
-      d.unit = "V";
-    } else if (label == "Memory Utilization") {
-      d.value = fmt(m.memory.usage_percent, 1);
-      d.unit = "%";
-    } else if (label == "Memory Frequency") {
-      d.value = fmt(m.memory.frequency_mhz.value_or(0.0));
-      d.unit = "MHz";
-    } else if (label == "CPU Voltage") {
-      d.value = fmt(m.cpu.voltage_v.value_or(0.0), 3);
-      d.unit = "V";
-    } else if (label == "CPU Power") {
-      d.value = fmt(m.cpu.power_w.value_or(0.0), 1);
-      d.unit = "W";
-    } else if (label == "GPU Power") {
-      d.value = fmt(m.gpu.power_w.value_or(0.0), 1);
-      d.unit = "W";
-    } else if (label == "Motherboard Temperature") {
-      d.value = fmt(m.motherboard.temperature_c.value_or(0.0));
-      d.unit = "°C";
-    } else if (label == "Hard Disk Temperature") {
-      d.value = fmt(m.disk.temperature_c.value_or(0.0));
-      d.unit = "°C";
-    } else if (label == "Memory Temperature") {
-      d.value = fmt(m.memory.temperature_c.value_or(0.0));
-      d.unit = "°C";
+    const reed::HudMetric* metric = reed::find_hud_metric(label);
+    if (metric && metric->read) {
+      // value_or(0.0): a metric this machine cannot source sends 0 rather than
+      // nothing, which is what the firmware expects. `hud configure` warns at
+      // the point the user picks it, so a permanent 0 is never a surprise.
+      d.value = fmt(metric->read(m).value_or(0.0), metric->precision);
+      d.unit = metric->unit;
     } else {
       // Date&Time is drawn from the device's own clock; it needs no value.
       d.value = "0";

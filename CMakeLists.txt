@@ -20,10 +20,12 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
 add_library(reed STATIC
     src/protocol.cpp
     src/device.cpp
+    src/payload.cpp
     src/adb.cpp
     src/media.cpp
     src/config.cpp
     src/mapping.cpp
+    src/hud.cpp
     src/status_cache.cpp
     src/sysinfo.cpp
 )
@@ -91,10 +93,13 @@ if(REED_BUILD_TESTS)
     target_link_libraries(reed-config-test PRIVATE reed)
     add_executable(reed-payload-test tests/payload_test.cpp)
     target_link_libraries(reed-payload-test PRIVATE reed)
+    add_executable(reed-cache-test tests/cache_test.cpp)
+    target_link_libraries(reed-cache-test PRIVATE reed)
     enable_testing()
     add_test(NAME protocol COMMAND reed-protocol-test)
     add_test(NAME config COMMAND reed-config-test)
     add_test(NAME payload COMMAND reed-payload-test)
+    add_test(NAME cache COMMAND reed-cache-test)
 endif()
 
 install(TARGETS reed-tpse RUNTIME DESTINATION bin)

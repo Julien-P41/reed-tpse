@@ -14,12 +14,12 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
-#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "reed/adb.hpp"
+#include "reed/hud.hpp"
 #include "reed/device.hpp"
 #include "reed/mapping.hpp"
 #include "reed/sysinfo.hpp"
@@ -38,25 +38,18 @@ std::string normalise_hex_colour(const std::string& in) {
   return (!in.empty() && in[0] == '#') ? in.substr(1) : in;
 }
 
-// Firmware-defined label set. Anything outside this is rejected with a clear
-// error so typos don't silently produce a dead overlay slot.
-// Labels are passed through to the firmware verbatim, so they must match its
-// vocabulary exactly. The date label is "Date&Time" -- unspaced. The spaced
-// "Date & Time" is the vendor app's *UI* string (it sits in the renderer i18n
-// next to the French "Date et heure"); the unspaced form is what the vendor's
-// main process puts on the wire. Verified on firmware V1.0.11: "Date&Time"
-// renders the clock, "Date & Time" is silently dropped while the other
-// metrics in the same request still render.
-const std::set<std::string>& known_hud_labels() {
-  static const std::set<std::string> labels = {
-      "CPU Temperature",         "CPU Frequency",       "CPU Usage",
-      "CPU Voltage",             "GPU Temperature",     "GPU Frequency",
-      "GPU Usage",               "GPU Voltage",         "Motherboard Temperature",
-      "Memory Frequency",        "Memory Utilization",  "Hard Disk Temperature",
-      "CPU Power",               "GPU Power",           "Memory Temperature",
-      "Date&Time",
-  };
-  return labels;
+// Firmware-defined label set, from the one table in reed/hud.hpp. Anything
+// outside it is rejected with a clear error so typos do not silently produce a
+// dead overlay slot.
+//
+// The date label is "Date&Time" -- unspaced. The spaced "Date & Time" is the
+// vendor app's *UI* string (it sits in the renderer i18n next to the French
+// "Date et heure"); the unspaced form is what the vendor's main process puts on
+// the wire. Verified on firmware V1.0.11: "Date&Time" renders the clock,
+// "Date & Time" is silently dropped while the other metrics in the same request
+// still render.
+bool is_known_hud_label(const std::string& label) {
+  return reed::find_hud_metric(label) != nullptr;
 }
 
 // Why a metric is missing, so the warning is actionable rather than a shrug.
@@ -78,16 +71,13 @@ std::string metric_hint(const std::string& label) {
 // Whether this machine can actually source a label. Date&Time is always fine
 // (device clock); everything else must have a real reading behind it, or the
 // overlay burns one of three slots rendering a permanent 0.
+//
+// The table answers this: a metric with no reader at all has no host value to
+// miss, and one whose reader returns nullopt has no sensor on this machine.
 bool metric_available(const std::string& label, const reed::SystemMetrics& m) {
-  if (label == "CPU Voltage") return m.cpu.voltage_v.has_value();
-  if (label == "CPU Power") return m.cpu.power_w.has_value();
-  if (label == "GPU Power") return m.gpu.power_w.has_value();
-  if (label == "Motherboard Temperature")
-    return m.motherboard.temperature_c.has_value();
-  if (label == "Hard Disk Temperature") return m.disk.temperature_c.has_value();
-  if (label == "Memory Temperature") return m.memory.temperature_c.has_value();
-  if (label == "Memory Frequency") return m.memory.frequency_mhz.has_value();
-  return true;
+  const reed::HudMetric* metric = reed::find_hud_metric(label);
+  if (!metric || !metric->read) return true;
+  return metric->read(m).has_value();
 }
 
 std::vector<std::string> split_csv(const std::string& s) {
@@ -171,7 +161,11 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
     // Splitting" wrapped in the single-zone body.
     //
     // The metrics are cleared above, so the derived config carries none.
-    if (!port.empty() && !state.media.empty()) {
+    // A preset counts as something on screen. This checked media only, and
+    // selecting a preset clears media -- so with a preset showing and no daemon
+    // holding the port, the state was saved and the panel kept rendering the
+    // metrics until something else reconnected. cmd_filter has the right shape.
+    if (!port.empty() && (!state.media.empty() || state.preset)) {
       reed::Device device(port, verbose);
       if (device.connect()) {
         device.handshake();
@@ -278,9 +272,8 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
   }
 
   // Validate labels.
-  const auto& known = known_hud_labels();
   for (const auto& m : h.metrics) {
-    if (known.count(m) == 0) {
+    if (!is_known_hud_label(m)) {
       std::cerr << "Unknown metric label: \"" << m << "\"\n";
       std::cerr << "Run `reed-tpse hud configure --help` (or see `reed-tpse -h`) "
                    "for the known label list.\n";

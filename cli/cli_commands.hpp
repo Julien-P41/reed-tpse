@@ -33,8 +33,8 @@ int cmd_display(const std::string& port, const std::vector<std::string>& files,
 int cmd_brightness(const std::string& port, int value, bool verbose);
 int cmd_list();
 int cmd_delete(const std::vector<std::string>& files);
-int cmd_lock_display(const std::string& port,
-                     const std::vector<std::string>& args, int brightness,
+// No port: this writes config.json and never touches the device.
+int cmd_lock_display(const std::vector<std::string>& args, int brightness,
                      bool brightness_given, bool verbose);
 
 int cmd_hud(const std::string& port, const std::vector<std::string>& args,

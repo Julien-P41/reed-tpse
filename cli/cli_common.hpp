@@ -55,6 +55,15 @@ bool save_state_or_report(const reed::DisplayState& state);
 // merely has it open? Only a daemon will apply a saved state, so only a daemon
 // justifies telling the user their change will be applied.
 bool daemon_holds_port(const std::string& port);
+
+// The daemon holds the port exclusively and re-applies whenever the state file
+// changes, so a command whose effect is stored in that file can simply save and
+// let the daemon push it. Failing instead -- which is what every one of these
+// used to do -- refuses a change the daemon is about to make anyway.
+//
+// Transient commands are the exception: they have nothing to save and still
+// need the port for themselves. `power` and `rotate` are events, `raw` is
+// arbitrary, `status` and `info` are reads.
 int defer_to_daemon(const std::string& what);
 
 // A named LCD-fan tier: the vendor pairs a fixed duty with a specific curve,

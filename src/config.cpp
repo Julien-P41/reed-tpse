@@ -5,63 +5,18 @@
 #include <fstream>
 #include <sstream>
 
+#include "reed/json.hpp"
 #include "reed/picojson.h"
 
 namespace fs = std::filesystem;
 
 namespace reed {
 
-namespace {
-
-std::string get_string(const picojson::value& v, const std::string& key,
-                       const std::string& def = "") {
-  if (!v.is<picojson::object>()) return def;
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->second.is<std::string>()) return def;
-  return it->second.get<std::string>();
-}
-
-int get_int(const picojson::value& v, const std::string& key, int def = 0) {
-  if (!v.is<picojson::object>()) return def;
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->second.is<double>()) return def;
-  return static_cast<int>(it->second.get<double>());
-}
-
-bool get_bool(const picojson::value& v, const std::string& key, bool def = false) {
-  if (!v.is<picojson::object>()) return def;
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->second.is<bool>()) return def;
-  return it->second.get<bool>();
-}
-
-std::vector<std::string> get_string_array(const picojson::value& v,
-                                          const std::string& key) {
-  std::vector<std::string> out;
-  if (!v.is<picojson::object>()) return out;
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->second.is<picojson::array>()) return out;
-  for (const auto& elem : it->second.get<picojson::array>()) {
-    if (elem.is<std::string>()) out.push_back(elem.get<std::string>());
-  }
-  return out;
-}
-
-const picojson::value& get_value(const picojson::value& v,
-                                 const std::string& key) {
-  static picojson::value null_val;
-  if (!v.is<picojson::object>()) return null_val;
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end()) return null_val;
-  return it->second;
-}
-
-}  // namespace
+using json::get_bool;
+using json::get_int;
+using json::get_string;
+using json::get_string_array;
+using json::get_value;
 
 namespace {
 

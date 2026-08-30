@@ -1,4 +1,6 @@
 #include "reed/device.hpp"
+#include "reed/hud.hpp"
+#include "reed/json.hpp"
 #include "reed/wire.hpp"
 
 #include <fcntl.h>
@@ -19,33 +21,9 @@
 
 namespace reed {
 
-namespace {
-
-std::string get_string(const picojson::value& v, const std::string& key,
-                       const std::string& def = "") {
-  if (!v.is<picojson::object>()) return def;
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->second.is<std::string>()) return def;
-  return it->second.get<std::string>();
-}
-
-bool has_key(const picojson::value& v, const std::string& key) {
-  if (!v.is<picojson::object>()) return false;
-  return v.get<picojson::object>().count(key) > 0;
-}
-
-const picojson::value& get_value(const picojson::value& v,
-                                 const std::string& key) {
-  static picojson::value null_val;
-  if (!v.is<picojson::object>()) return null_val;
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end()) return null_val;
-  return it->second;
-}
-
-}  // namespace
+using json::get_string;
+using json::get_value;
+using json::has_key;
 
 bool DeviceStatus::healthy() const {
   for (const auto& w : warnings) {
@@ -529,120 +507,6 @@ std::optional<DeviceInfo> Device::handshake() {
   return info;
 }
 
-namespace payload {
-namespace {
-
-// The `settings` block, shared by screen configs and presets.
-picojson::object settings_object(const DisplaySettings& in) {
-  picojson::object filter;
-  // null, not "": the vendor's "no filter" is a JSON null.
-  filter["value"] =
-      in.filter.empty() ? picojson::value() : picojson::value(in.filter);
-  filter["opacity"] = picojson::value(static_cast<double>(in.filter_opacity));
-
-  picojson::array badges_arr;
-  for (const auto& b : in.badges) {
-    badges_arr.push_back(picojson::value(b));
-  }
-
-  picojson::object out;
-  // The device wants `#RRGGBB`; everything host-side stores bare hex.
-  out["color"] = picojson::value(
-      in.color.empty() || in.color[0] == '#' ? in.color : "#" + in.color);
-  out["align"] = picojson::value(in.align);
-  out["badges"] = picojson::value(badges_arr);
-  out["filter"] = picojson::value(filter);
-  return out;
-}
-
-// The screen half: `id` + media + overlay. Sent bare as waterBlockScreenId,
-// or nested under waterBlockScreen.id inside a `config` frame.
-picojson::object screen_object(const ScreenConfig& config) {
-  picojson::array media_arr;
-  for (const auto& m : config.media) {
-    media_arr.push_back(picojson::value(m));
-  }
-  picojson::array sysinfo_arr;
-  for (const auto& label : config.sysinfo_display) {
-    sysinfo_arr.push_back(picojson::value(label));
-  }
-
-  picojson::object out;
-
-  // A preset is a different shape, not a variant with the media blanked. The
-  // vendor's frame carries the preset id, settings and metrics and nothing
-  // else. Sending kCustomization with an empty media list -- which is what a
-  // preset used to produce, because selecting one clears the saved media --
-  // tells the device to show custom media that is not there.
-  if (!config.preset_id.empty()) {
-    out["id"] = picojson::value(config.preset_id);
-    out["settings"] = picojson::value(settings_object(config.settings));
-    out["sysinfoDisplay"] = picojson::value(sysinfo_arr);
-    return out;
-  }
-
-  // No "Type" key: that was ours. KANALI sends `id` alone to pick between
-  // custom media (wire::kCustomization) and a preset ("Pre-set N: Name").
-  out["id"] = picojson::value(wire::kCustomization);
-  out["screenMode"] = picojson::value(config.screen_mode);
-  out["playMode"] = picojson::value(config.play_mode);
-  out["media"] = picojson::value(media_arr);
-
-  if (config.split) {
-    // Two zones as parallel arrays, and no `ratio` -- the split layout fixes
-    // its own geometry.
-    picojson::array settings_arr;
-    settings_arr.push_back(picojson::value(settings_object(config.settings)));
-    settings_arr.push_back(
-        picojson::value(settings_object(config.split_settings_right)));
-    out["settings"] = picojson::value(settings_arr);
-
-    picojson::array right_arr;
-    for (const auto& label : config.split_sysinfo_right) {
-      right_arr.push_back(picojson::value(label));
-    }
-    picojson::array zones;
-    zones.push_back(picojson::value(sysinfo_arr));
-    zones.push_back(picojson::value(right_arr));
-    out["sysinfoDisplay"] = picojson::value(zones);
-  } else {
-    out["ratio"] = picojson::value(config.ratio);
-    out["settings"] = picojson::value(settings_object(config.settings));
-    out["sysinfoDisplay"] = picojson::value(sysinfo_arr);
-  }
-  return out;
-}
-
-}  // namespace
-
-std::string screen_config(const ScreenConfig& config) {
-  return picojson::value(screen_object(config)).serialize();
-}
-
-std::string overlay(const DisplaySettings& settings,
-                    const std::vector<std::string>& metrics) {
-  picojson::array items;
-  for (const auto& m : metrics) items.push_back(picojson::value(m));
-
-  picojson::object obj;
-  obj["settings"] = picojson::value(settings_object(settings));
-  obj["sysinfoDisplay"] = picojson::value(items);
-  return picojson::value(obj).serialize();
-}
-
-std::string preset(const std::string& id, const DisplaySettings& settings,
-                   const std::vector<std::string>& metrics) {
-  picojson::array items;
-  for (const auto& m : metrics) items.push_back(picojson::value(m));
-
-  picojson::object obj;
-  obj["id"] = picojson::value(id);
-  obj["settings"] = picojson::value(settings_object(settings));
-  obj["sysinfoDisplay"] = picojson::value(items);
-  return picojson::value(obj).serialize();
-}
-
-}  // namespace payload
 
 std::optional<Response> Device::set_screen_config(const ScreenConfig& config) {
   std::string content = payload::screen_config(config);
@@ -661,50 +525,6 @@ std::optional<Response> Device::set_brightness(int value) {
   return send_command("POST", "brightness", content);
 }
 
-namespace payload {
-
-std::string full_config(const FullConfig& config,
-                        const ScreenConfig& screen) {
-  picojson::object id = screen_object(screen);
-
-  picojson::object fan;
-  fan["mode"] = picojson::value(config.fan_mode);
-  picojson::array points;
-  for (const auto& [temp, duty] : config.fan_curve) {
-    picojson::array point;
-    point.push_back(picojson::value(static_cast<double>(temp)));
-    point.push_back(picojson::value(static_cast<double>(duty)));
-    points.push_back(picojson::value(point));
-  }
-  fan["smartMode"] = picojson::value(points);
-  fan["fixedMode"] = picojson::value(static_cast<double>(config.fan_fixed));
-
-  picojson::object screen_block;
-  screen_block["enable"] = picojson::value(config.screen_enable);
-  screen_block["displayInSleep"] = picojson::value(config.display_in_sleep);
-  screen_block["brightness"] =
-      picojson::value(static_cast<double>(config.brightness));
-  // Omitted unless explicitly set -- see the note on FullConfig::rotate.
-  if (config.rotate) {
-    screen_block["rotate"] =
-        picojson::value(static_cast<double>(*config.rotate));
-  }
-  screen_block["id"] = picojson::value(id);
-  screen_block["fanLCD"] = picojson::value(fan);
-
-  picojson::object spec;
-  spec["cpu"] = picojson::value(config.cpu_name);
-  spec["gpu"] = picojson::value(config.gpu_name);
-
-  picojson::object obj;
-  obj["temperature"] = picojson::value(config.temperature_unit);
-  obj["waterBlockScreen"] = picojson::value(screen_block);
-  obj["spec"] = picojson::value(spec);
-
-  return picojson::value(obj).serialize();
-}
-
-}  // namespace payload
 
 std::optional<Response> Device::send_config(const FullConfig& config,
                                            const ScreenConfig& screen) {
@@ -777,37 +597,24 @@ std::string Device::sysinfo_body(const std::vector<SysinfoData>& data,
     }
   };
 
+  // Placement comes from the one metric table, not from a chain of string
+  // comparisons kept in step with three other copies by hand. An unknown label
+  // is dropped exactly as before -- the firmware would ignore it anyway, and a
+  // metric with no pc_object (Date&Time) has no host value to place.
+  const std::pair<const char*, picojson::object*> targets[] = {
+      {"cpu", &cpu},   {"gpu", &gpu},   {"memory", &memory},
+      {"motherboard", &motherboard}, {"disk", &disk}};
+
   for (const auto& item : data) {
-    if (item.label == "CPU Temperature") {
-      cpu["temperature"] = picojson::value(to_double(item.value));
-    } else if (item.label == "CPU Frequency") {
-      cpu["speedAverage"] = picojson::value(to_double(item.value));
-    } else if (item.label == "CPU Usage") {
-      cpu["load"] = picojson::value(to_double(item.value));
-    } else if (item.label == "CPU Voltage") {
-      cpu["voltage"] = picojson::value(to_double(item.value));
-    } else if (item.label == "GPU Temperature") {
-      gpu["temperature"] = picojson::value(item.value);
-    } else if (item.label == "GPU Frequency") {
-      gpu["speed"] = picojson::value(to_double(item.value));
-    } else if (item.label == "GPU Usage") {
-      gpu["load"] = picojson::value(to_double(item.value));
-    } else if (item.label == "GPU Voltage") {
-      gpu["voltage"] = picojson::value(to_double(item.value));
-    } else if (item.label == "Motherboard Temperature") {
-      motherboard["temperature"] = picojson::value(to_double(item.value));
-    } else if (item.label == "Memory Frequency") {
-      memory["speed"] = picojson::value(to_double(item.value));
-    } else if (item.label == "Memory Utilization") {
-      memory["load"] = picojson::value(to_double(item.value));
-    } else if (item.label == "Hard Disk Temperature") {
-      disk["temperature"] = picojson::value(to_double(item.value));
-    } else if (item.label == "CPU Power") {
-      cpu["power"] = picojson::value(to_double(item.value));
-    } else if (item.label == "GPU Power") {
-      gpu["power"] = picojson::value(to_double(item.value));
-    } else if (item.label == "Memory Temperature") {
-      memory["temperature"] = picojson::value(to_double(item.value));
+    const HudMetric* metric = find_hud_metric(item.label);
+    if (!metric || !metric->pc_object) continue;
+    for (const auto& [name, obj] : targets) {
+      if (std::string(name) != metric->pc_object) continue;
+      (*obj)[metric->pc_field] =
+          metric->pc_type == PcInfoType::String
+              ? picojson::value(item.value)
+              : picojson::value(to_double(item.value));
+      break;
     }
   }
 
@@ -888,33 +695,6 @@ std::optional<Response> Device::set_fan_profile(const std::string& json) {
   return send_command("POST", "fanLCDSet", json);
 }
 
-namespace payload {
-
-// {mode, smartMode, fixedMode} -- byte-for-byte the shape KANALI 1.2.1 puts on
-// the wire. No `speed`, and fixedMode is always a number even in Smart Mode.
-std::string fan(const std::string& mode, const FanCurve& curve,
-                int fixed_duty) {
-  picojson::array points;
-  for (const auto& [temp, duty] : curve) {
-    picojson::array point;
-    point.push_back(picojson::value(static_cast<double>(temp)));
-    point.push_back(picojson::value(static_cast<double>(duty)));
-    points.push_back(picojson::value(point));
-  }
-
-  picojson::object obj;
-  obj["mode"] = picojson::value(mode);
-  obj["smartMode"] = picojson::value(points);
-  obj["fixedMode"] = picojson::value(static_cast<double>(fixed_duty));
-  return picojson::value(obj).serialize();
-}
-
-// The vendor's "low" tier, and the same curve its `config` blob ships as the
-// factory default.
-const FanCurve kDefaultCurve = {{0, 10},  {10, 20}, {30, 30},  {50, 40},
-                                {65, 55}, {80, 70}, {90, 100}, {100, 100}};
-
-}  // namespace payload
 
 std::optional<Response> Device::set_fan_fixed(int duty, const FanCurve& curve) {
   return set_fan_profile(payload::fan(

@@ -40,7 +40,12 @@ using FanCurve = std::vector<std::pair<int, int>>;
 
 namespace payload {
 // The vendor's "low" tier, and what its `config` blob ships as the factory
-// default. Declared here so FullConfig can default to it.
+// default. Declared here rather than with the other payload entry points below
+// because FullConfig, a few lines down, defaults to it.
+//
+// Defined once, in src/payload.cpp. It used to be declared in both of this
+// header's `namespace payload` blocks -- harmless, but two declarations of one
+// constant is how a second definition eventually gets added.
 extern const FanCurve kDefaultCurve;
 }  // namespace payload
 
@@ -151,10 +156,6 @@ std::string overlay(const DisplaySettings& settings,
 std::string preset(const std::string& id, const DisplaySettings& settings,
                    const std::vector<std::string>& metrics);
 std::string full_config(const FullConfig& config, const ScreenConfig& screen);
-
-// The vendor's default fan curve -- its "low" tier, and what its `config`
-// blob ships as the factory setting.
-extern const FanCurve kDefaultCurve;
 
 }  // namespace payload
 

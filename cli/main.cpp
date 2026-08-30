@@ -20,6 +20,7 @@
 #include "cli_common.hpp"
 
 #include "reed/adb.hpp"
+#include "reed/hud.hpp"
 #include "cli_commands.hpp"
 
 #include <set>
@@ -27,6 +28,9 @@
 
 namespace fs = std::filesystem;
 
+
+
+static void print_hud_labels();
 
 
 static void print_usage(const char* prog) {
@@ -88,14 +92,10 @@ static void print_usage(const char* prog) {
          "                          curve data unless --force\n"
          "  --force                 Override the fan-profile refusal\n\n"
          "HUD options (with `hud configure`):\n"
-         "  --metrics <csv>         Comma-separated labels, max 3. Known labels:\n"
-         "                          CPU Temperature, CPU Frequency, CPU Usage,\n"
-         "                          CPU Voltage, GPU Temperature, GPU Frequency,\n"
-         "                          GPU Usage, GPU Voltage, Motherboard Temperature,\n"
-         "                          Memory Frequency, Memory Utilization,\n"
-         "                          Hard Disk Temperature, CPU Power, GPU Power,\n"
-         "                          Memory Temperature, Date&Time\n"
-         "  --align <align>         Left | Center | Right (default: Left)\n"
+         "  --metrics <csv>         Comma-separated labels, max 3. Known labels:\n";
+  print_hud_labels();
+  std::cout
+      << "  --align <align>         Left | Center | Right (default: Left)\n"
          "  --color <hex>           6 hex digits, no # -- e.g. 00FF00\n"
          "                          (default: FFFFFF)\n"
          "  --badges <csv>          cpu,gpu (or none). Default: none\n"
@@ -105,80 +105,36 @@ static void print_usage(const char* prog) {
          "  --gpu-name <str>        Override auto-detected GPU name\n";
 }
 
-namespace {
+// The label list, wrapped, straight from the metric table -- so --help cannot
+// advertise a label the firmware does not know, or omit one it does. It was a
+// hand-maintained copy of the same fifteen strings.
+static void print_hud_labels() {
+  const size_t kIndent = 26, kWidth = 78;
+  std::string line(kIndent, ' ');
+  bool first_on_line = true;
+  for (const auto& m : reed::hud_metrics()) {
+    const std::string item = std::string(m.label) + ",";
+    if (!first_on_line && line.size() + 1 + item.size() > kWidth) {
+      std::cout << line << "\n";
+      line.assign(kIndent, ' ');
+      first_on_line = true;
+    }
+    if (!first_on_line) line += " ";
+    line += item;
+    first_on_line = false;
+  }
+  if (!line.empty() && line.find_first_not_of(' ') != std::string::npos) {
+    if (line.back() == ',') line.pop_back();
+    std::cout << line << "\n";
+  }
+}
 
-
-
-
-
-
-
-}  // namespace
-
-// The daemon holds the port exclusively (TIOCEXCL) and re-applies whenever the
-// state file changes, so a command whose effect is stored in that file can
-// simply save and let the daemon push it. Failing instead -- which is what
-// every one of these used to do -- refuses a change the daemon is about to
-// make anyway.
-//
-// Transient commands have nothing to save and still need the port for
-// themselves: `power` and `rotate` are events, `raw` is arbitrary, `status`
-// and `info` are reads.
-// Load the state a command is about to modify and save back.
-//
-// A missing file is first run: defaults are the right answer. A file that
-// exists but does not parse is NOT -- every caller here reads, changes one
-// field and writes the whole thing back, so treating a bad read as first run
-// persists defaults over the media, HUD, fan and filter settings that were in
-// there. Refuse instead and say why.
-// The `settings` block, derived from an overlay config plus the media filter.
-// Shared by the screen config, the preset id and the overlay command, which
-// all carry the same block.
-
-// The one place a ScreenConfig is derived from saved state.
-//
-// This mapping used to be written out at each call site -- five copies of the
-// HUD-to-settings assignment and three of the split right-zone block. They
-// drifted: one copy assigned the right zone before its source was populated,
-// shipping a zone with default styling, and that only showed up on the panel.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+// Commands with their own flag parsers. Their arguments must reach them
+// untouched; every other command takes positional arguments, where an
+// unrecognised --flag is a mistake worth catching in main().
+static bool parses_own_flags(const std::string& command) {
+  return command == "hud" || command == "lock-display";
+}
 
 int main(int argc, char* argv[]) {
   if (argc < 2) {
@@ -311,19 +267,24 @@ int main(int argc, char* argv[]) {
     } else if (arg == "-h" || arg == "--help") {
       print_usage(argv[0]);
       return 0;
-    } else if (command == "lock-display" &&
-               (arg == "--default" || arg == "--remove")) {
-      // Command-scoped, handled inside cmd_lock_display. Without this the
-      // guard below rejects them -- so `lock-display --default`, which is in
-      // --help and in the README, has never worked, and the code in
-      // cmd_lock_display that handles it was unreachable. Only the undashed
-      // `default` spelling got through.
+    } else if (parses_own_flags(command)) {
+      // Two commands parse their own flags, so anything unrecognised here
+      // belongs to them and is passed through.
+      //
+      // Without this the guard below rejected it first, and the handling
+      // inside the command was unreachable. That took out the whole of
+      // `hud configure` -- --metrics, --align, --color, --badges, --interval,
+      // --unit, --cpu-name, --gpu-name, --zone -- and `lock-display --default`
+      // and `--remove`, every one of them documented, several with worked
+      // examples in the README. The guard was added to stop a removed flag
+      // being read as a media filename and it caught these too.
       args.push_back(arg);
     } else if (arg.rfind("--", 0) == 0) {
       // Anything starting with -- that got this far is not a flag we know.
       // These used to fall through to the positional list, so a removed flag
       // like --keepalive was quietly taken as a media filename and reported as
-      // "not on device" -- an error about the wrong thing entirely.
+      // "not on device" -- an error about the wrong thing entirely. That still
+      // holds for every command that takes positional arguments.
       std::cerr << "Unknown option: " << arg << "\n";
       print_usage(argv[0]);
       return 1;
@@ -408,7 +369,7 @@ int main(int argc, char* argv[]) {
     return cmd_fan(port, args.empty() ? std::string() : args[0],
                    fan_speed, fan_smart, fan_profile, force, verbose);
   } else if (command == "lock-display") {
-    return cmd_lock_display(port, args, brightness, brightness_given, verbose);
+    return cmd_lock_display(args, brightness, brightness_given, verbose);
   } else if (command == "power") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse power <shutdown|lock|unlock|ac|battery>\n";

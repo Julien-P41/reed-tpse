@@ -7,11 +7,14 @@
 #include <sstream>
 
 #include "reed/config.hpp"
+#include "reed/json.hpp"
 #include "reed/picojson.h"
 
 namespace fs = std::filesystem;
 
 namespace reed {
+
+using json::get_string;
 
 namespace {
 
@@ -25,14 +28,6 @@ picojson::array to_array(const std::vector<std::string>& in) {
   picojson::array out;
   for (const auto& s : in) out.push_back(picojson::value(s));
   return out;
-}
-
-std::string get_string(const picojson::value& v, const std::string& key) {
-  if (!v.is<picojson::object>()) return {};
-  const auto& obj = v.get<picojson::object>();
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->second.is<std::string>()) return {};
-  return it->second.get<std::string>();
 }
 
 }  // namespace

@@ -360,13 +360,6 @@ int cmd_display(const std::string& port,
   std::cout << "Brightness: " << effective_brightness
             << (brightness_given ? "\n" : " (unchanged)\n");
 
-  // Save state for daemon. Load first and mutate only the display fields:
-  // save_state() truncates, so building a fresh DisplayState here would drop
-  // every other setting sharing this file -- the HUD config, display_in_sleep,
-  // and any non-default screen/play mode -- on each `display` call.
-  // Brightness is its own setting. Changing what is on screen should not
-  // silently reset it to the config default -- that quietly undid any
-  // `reed-tpse brightness N` the moment the media changed.
   // No keepalive loop here. `display` used to be able to hold the connection
   // itself, which was a second, subtly different implementation of what the
   // daemon does -- and a `display --keepalive` left running in another
@@ -460,9 +453,8 @@ int cmd_delete(const std::vector<std::string>& files) {
 
 // Media shown while the session is locked, replacing the firmware's standby
 // clip. Only meaningful with `report_lock`, which is what notices the lock.
-int cmd_lock_display(const std::string& port, const std::vector<std::string>& args,
-                            int brightness, bool brightness_given, bool verbose) {
-  (void)port;
+int cmd_lock_display(const std::vector<std::string>& args, int brightness,
+                            bool brightness_given, bool verbose) {
   auto cfg = reed::ConfigManager::load_config();
   if (!cfg) cfg = reed::Config{};
 
