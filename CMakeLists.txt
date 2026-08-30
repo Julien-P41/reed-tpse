@@ -62,8 +62,14 @@ option(REED_INSTALL_SLEEP_HOOK "Install the suspend/resume hook" OFF)
 set(REED_SLEEP_HOOK_DIR "/usr/lib/systemd/system-sleep"
     CACHE PATH "Where to install the sleep hook")
 if(REED_INSTALL_SLEEP_HOOK)
-    install(PROGRAMS systemd/reed-tpse-sleep DESTINATION ${REED_SLEEP_HOOK_DIR}
-            RENAME reed-tpse)
+    # Templated on the prefix, exactly like both units. The hook used to
+    # hardcode /usr/local/bin and exit 0 when nothing was there, so any other
+    # CMAKE_INSTALL_PREFIX produced an installed hook that did nothing at all
+    # and said nothing about it -- the same defect the units were fixed for.
+    configure_file(systemd/reed-tpse-sleep.in
+                   ${CMAKE_CURRENT_BINARY_DIR}/reed-tpse-sleep @ONLY)
+    install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/reed-tpse-sleep
+            DESTINATION ${REED_SLEEP_HOOK_DIR} RENAME reed-tpse)
     message(STATUS "sleep hook will be installed to ${REED_SLEEP_HOOK_DIR}")
 endif()
 

@@ -1,0 +1,118 @@
+#!/bin/sh
+# Tell the cooler when the host suspends and resumes.
+#
+# Installed by CMake with -DREED_INSTALL_SLEEP_HOOK=ON, which substitutes the
+# install prefix below. To install by hand instead:
+#
+#   sudo install -m755 systemd/reed-tpse-sleep.in \
+#        /usr/lib/systemd/system-sleep/reed-tpse
+#
+# Copying the template unsubstituted is fine -- the @...@ placeholder simply
+# fails the -x test and the PATH lookup finds the binary anyway.
+#
+# systemd runs everything in system-sleep/ with ("pre"|"post", <sleep type>)
+# and BLOCKS the transition until it returns, so this must be quick and must
+# never hang. Every call that could stall is wrapped in `timeout`, and the
+# script always exits 0.
+#
+# No `set -e`, deliberately: a hook that aborts half way leaves the daemon
+# stopped and the panel in whatever state the last frame put it. Failures are
+# handled where they happen and reported, and the exit status stays 0 so the
+# transition is never blocked by this.
+#
+# The daemon holds the serial port with TIOCEXCL, so it has to let go first.
+# Stopping it on the way down is also what makes the panel stay dark: the
+# device treats any reconnect as a wake, and a running daemon reconnects
+# immediately after the event.
+#
+# Output goes to the journal -- `journalctl -u systemd-suspend.service`. This
+# says what it did rather than exiting silently: it used to hardcode
+# /usr/local/bin and `exit 0` when that was not there, so an install with any
+# other prefix disabled suspend handling completely, with no trace anywhere.
+
+UNIT=reed-tpse.service
+# What we actually stopped, so `post` restarts that and nothing else. /run is
+# tmpfs, so a crash between pre and post cannot leave a stale record past boot.
+STATE=/run/reed-tpse-sleep.stopped
+
+log() { echo "reed-tpse-sleep: $*"; }
+
+# The configured prefix first, then PATH, so a relocated install and a
+# hand-copied template both work.
+BIN="@CMAKE_INSTALL_PREFIX@/bin/reed-tpse"
+if [ ! -x "$BIN" ]; then
+    BIN=$(command -v reed-tpse 2>/dev/null)
+fi
+if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+    log "reed-tpse not found (tried @CMAKE_INSTALL_PREFIX@/bin and \$PATH); nothing to do"
+    exit 0
+fi
+
+# The daemon ships in two mutually exclusive scopes and this hook cannot know
+# which was installed, so it asks about both. A user-scope unit needs its
+# owner's session bus, which root reaches through runuser with the right
+# XDG_RUNTIME_DIR -- `systemctl --user` as root addresses root's own manager,
+# not theirs, which is why the old unqualified call never stopped a user daemon.
+user_ctl() { # uid name verb
+    timeout 5 runuser -u "$2" -- \
+        env XDG_RUNTIME_DIR="/run/user/$1" systemctl --user "$3" "$UNIT" \
+        >/dev/null 2>&1
+}
+
+stop_running() {
+    : > "$STATE"
+
+    if timeout 5 systemctl is-active --quiet "$UNIT" 2>/dev/null; then
+        timeout 10 systemctl stop "$UNIT" >/dev/null 2>&1
+        echo "system" >> "$STATE"
+        log "stopped system-scope $UNIT"
+    fi
+
+    command -v runuser >/dev/null 2>&1 || return 0
+    loginctl list-users --no-legend 2>/dev/null | while read -r uid name _; do
+        [ -n "$name" ] || continue
+        if user_ctl "$uid" "$name" is-active; then
+            user_ctl "$uid" "$name" stop
+            echo "user $uid $name" >> "$STATE"
+            log "stopped user-scope $UNIT for $name"
+        fi
+    done
+}
+
+# Only what we stopped. The old version started the unit unconditionally on
+# resume, so a machine that suspended with the daemon deliberately stopped came
+# back with it running.
+start_stopped() {
+    [ -f "$STATE" ] || return 0
+    while read -r kind uid name; do
+        case "$kind" in
+            system)
+                timeout 10 systemctl start "$UNIT" >/dev/null 2>&1
+                log "restarted system-scope $UNIT"
+                ;;
+            user)
+                user_ctl "$uid" "$name" start
+                log "restarted user-scope $UNIT for $name"
+                ;;
+        esac
+    done < "$STATE"
+    rm -f "$STATE"
+}
+
+case "$1" in
+  pre)
+    stop_running
+    timeout 10 "$BIN" power suspend >/dev/null 2>&1 \
+        || log "could not send the suspend event (is the cooler attached?)"
+    ;;
+  post)
+    # Before the daemon retakes the port. It re-applies everything on connect,
+    # including the media the standby clip replaced, so `resume` matters most
+    # when no daemon is enabled at all.
+    timeout 10 "$BIN" power resume >/dev/null 2>&1 \
+        || log "could not send the resume event"
+    start_stopped
+    ;;
+esac
+
+exit 0
