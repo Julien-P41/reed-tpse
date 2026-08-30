@@ -467,6 +467,11 @@ int cmd_daemon_start(const std::string& port, bool foreground,
       return false;
     }
     device = std::make_unique<reed::Device>(*found, verbose);
+    // Re-pair adb with the tty we actually landed on. A rescan can return a
+    // different port than the one bound at startup -- that is what the whole
+    // reconnect path exists for -- and without this adb keeps driving whatever
+    // it resolved first.
+    reed::Adb::bind_to_port(*found);
     if (device->connect() && restore(*device)) {
       std::cerr << "keepalive: reconnected on " << *found << "\n";
       return true;

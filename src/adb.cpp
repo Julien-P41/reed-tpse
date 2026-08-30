@@ -131,10 +131,39 @@ std::string& bound_usb_port() {
   return port;
 }
 
+// The resolved serial, and whether it has been resolved at all. At namespace
+// scope rather than inside target_serial() so that bind_to_port() can throw it
+// away -- a serial chosen under one binding is not an answer under another.
+bool& serial_resolved() {
+  static bool resolved = false;
+  return resolved;
+}
+
+std::optional<std::string>& cached_serial() {
+  static std::optional<std::string> serial;
+  return serial;
+}
+
 }  // namespace
 
 void Adb::bind_to_port(const std::string& tty_path) {
-  bound_usb_port() = usb_port_for_tty(tty_path);
+  const std::string port = usb_port_for_tty(tty_path);
+  if (port == bound_usb_port()) return;
+
+  bound_usb_port() = port;
+
+  // Drop the cached serial. It was memoised for the whole process, so anything
+  // that resolved one before the binding was set kept using it afterwards --
+  // observed: with two coolers listed, a call made before bind_to_port() picked
+  // the first by product match, and every call after the binding still went to
+  // that one. docs/multi-cooler.md claims pinning a port makes adb follow it,
+  // and that only held if nothing had asked first.
+  //
+  // It also matters with one cooler: the daemon re-scans and can land on a
+  // different tty after a USB renumber, which is what the stable symlink
+  // exists for.
+  serial_resolved() = false;
+  cached_serial().reset();
 }
 
 // The serial of the cooler, for `adb -s`.
@@ -150,10 +179,9 @@ void Adb::bind_to_port(const std::string& tty_path) {
 // one is used -- keeping the single-device case working even if the product
 // string ever changes.
 static std::optional<std::string> target_serial() {
-  static bool resolved = false;
-  static std::optional<std::string> serial;
-  if (resolved) return serial;
-  resolved = true;
+  auto& serial = cached_serial();
+  if (serial_resolved()) return serial;
+  serial_resolved() = true;
 
   auto out = Adb::devices_verbose();
   if (!out) return serial;
