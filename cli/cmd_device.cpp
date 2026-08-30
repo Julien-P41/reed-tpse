@@ -54,9 +54,21 @@ int cmd_info(const std::string& port, bool verbose) {
                 << "  Product: " << snap->info.product_id << "\n"
                 << "  OS: " << snap->info.os << "\n"
                 << "  Serial: " << snap->info.serial << "\n"
-                << "  App: " << snap->info.app_version << "\n"
+                << "  App Version: " << snap->info.app_version << "\n"
                 << "  Firmware: " << snap->info.firmware << "\n"
                 << "  Hardware: " << snap->info.hardware << "\n";
+      // Same fields and the same labels as the live path below. This printed
+      // "App:" where the live one prints "App Version:", and dropped the
+      // Attributes line entirely, so the two outputs disagreed depending on
+      // whether a daemon happened to be running.
+      if (!snap->info.attributes.empty()) {
+        std::cout << "  Attributes: ";
+        for (size_t i = 0; i < snap->info.attributes.size(); ++i) {
+          if (i > 0) std::cout << ", ";
+          std::cout << snap->info.attributes[i];
+        }
+        std::cout << "\n";
+      }
       // Say how old it is. Printing a bare "(from the daemon)" made a snapshot
       // from an hour ago read exactly like one from a second ago.
       const long long age = snap->age_seconds();

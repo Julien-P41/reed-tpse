@@ -178,7 +178,9 @@ std::optional<std::string> Device::find_device(bool verbose) {
     }
 
     Device dev(port, false);
-    if (!dev.connect()) {
+    // Quietly: this is a scan over every ttyACM on the system, and most of
+    // what it finds is not ours.
+    if (!dev.connect(false)) {
       if (verbose) {
         std::cout << "failed to open\n";
       }
@@ -208,7 +210,7 @@ Device::~Device() {
   disconnect();
 }
 
-bool Device::connect() {
+bool Device::connect(bool report_conflicts) {
   // O_CLOEXEC is load-bearing. Without it every fork/exec in this program --
   // the adb calls, loginctl, nvidia-smi, ffmpeg -- inherits the serial fd.
   // Most children exit promptly and the copy dies with them, but adb's
@@ -223,7 +225,7 @@ bool Device::connect() {
     // EBUSY means another instance holds the port exclusively (see TIOCEXCL
     // below). Two readers on one tty split incoming frames between them at
     // random, so name the holder rather than failing with a bare errno.
-    if (errno == EBUSY) {
+    if (errno == EBUSY && report_conflicts) {
       // Name the holder AND give a remedy that matches it. This printed the
       // reed-tpse remedies unconditionally, so a user whose port was held by
       // adb was told to stop the daemon -- which changed nothing, and pointed

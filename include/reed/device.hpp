@@ -169,7 +169,13 @@ class Device {
   // Auto-detect device by scanning /dev/ttyACM* and attempting handshake
   static std::optional<std::string> find_device(bool verbose = false);
 
-  bool connect();
+  // `report_conflicts` controls whether an EBUSY names the holder and offers a
+  // remedy on stderr. That advice is worth having when a user asked for this
+  // specific port, and is noise when find_device is probing candidates it has
+  // no particular reason to expect -- an unrelated program holding some other
+  // ttyACM would otherwise produce a paragraph telling the user to stop the
+  // reed-tpse daemon, which is not what is holding it.
+  bool connect(bool report_conflicts = true);
   void disconnect();
 
   // Discard anything the device sends unprompted. Opening the port asserts

@@ -378,7 +378,10 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
 
   std::cout << "HUD configured. Daemon will push updates every "
             << h.push_interval_sec << "s.\n";
-  std::cout << "Restart the daemon (`reed-tpse daemon stop && reed-tpse daemon "
-               "start`) to pick up the new config.\n";
+  // No "restart the daemon" any more: it watches the state file's mtime and
+  // reloads and re-applies within a second of this write. That advice was true
+  // once and has not been since.
+  std::cout << "  A running daemon picks this up within a second; there is "
+               "nothing to restart.\n";
   return 0;
 }

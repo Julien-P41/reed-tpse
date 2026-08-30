@@ -420,6 +420,12 @@ int cmd_daemon_start(const std::string& port, bool foreground,
     return true;
   };
 
+  // Before the first restore, not after. restore() calls wait_for_ui(45), so
+  // a SIGTERM arriving during startup used to hit the default disposition and
+  // kill the process outright -- no `shutdown` event, no snapshot cleanup.
+  std::signal(SIGINT, signal_handler);
+  std::signal(SIGTERM, signal_handler);
+
   const bool restored_at_startup = restore(*device);
 
   if (state->hud.enabled) {
@@ -435,9 +441,6 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   } else {
     std::cout << "Display restored. Running keepalive...\n";
   }
-
-  std::signal(SIGINT, signal_handler);
-  std::signal(SIGTERM, signal_handler);
 
   reed::SystemMonitor monitor;
   bool first_handshake_ok = false;
