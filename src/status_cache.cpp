@@ -57,6 +57,14 @@ std::string StatusCache::path() {
   return ConfigManager::get_state_dir() + "/status.json";
 }
 
+bool StatusCache::clear() {
+  std::error_code ec;
+  fs::remove(path(), ec);
+  // remove() reports false for "was not there", which is the postcondition we
+  // wanted anyway. Only a real filesystem error is a failure.
+  return !ec;
+}
+
 bool StatusCache::publish(const DeviceStatus& status, const DeviceInfo& info) {
   const std::string file = path();
   std::error_code ec;

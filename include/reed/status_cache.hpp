@@ -30,17 +30,49 @@ struct StatusSnapshot {
 
   // Seconds since it was taken, from the caller's clock.
   long long age_seconds() const;
+
+  // Past this, the snapshot is not evidence about the device any more: it
+  // says what the daemon last saw, not what is true now.
+  //
+  // The daemon refreshes the snapshot at least once per keepalive interval,
+  // and that interval is clamped to 55s at the top end. 180s therefore covers
+  // three consecutive failures at the slowest legal cadence, with margin --
+  // and eighteen of them at the default 10s. The bound has to hold for the
+  // worst case, so it is loose for the common one.
+  //
+  // Reaching it means the daemon is up -- readers only consult this file when
+  // it holds the port -- and has stopped getting answers, which is worth
+  // reporting rather than papering over with old numbers.
+  static constexpr long long kStaleAfterSeconds = 180;
+
+  bool stale() const { return age_seconds() > kStaleAfterSeconds; }
+
+  // For a caller that reports the age and the staleness together. stale() and
+  // age_seconds() each read the clock, so two calls can straddle a second
+  // boundary and emit `"ageSeconds":180,"stale":true` -- a JSON object that
+  // contradicts itself by one second, in the two fields a machine reads.
+  // Take the age once and pass it here instead.
+  static bool stale_at(long long age) { return age > kStaleAfterSeconds; }
 };
 
 class StatusCache {
  public:
-  // Under XDG_RUNTIME_DIR when set -- tmpfs, cleared at logout, which is the
-  // right lifetime for something describing a device that may be unplugged.
-  // Falls back to the state directory when it is not.
+  // Beside the state file, NOT under XDG_RUNTIME_DIR.
+  //
+  // Runtime dir is the tidier home, but the writer and the reader have to
+  // agree on it and they do not: a system-scope unit gets no XDG_RUNTIME_DIR
+  // while an interactive shell has one, so the daemon published to the state
+  // directory and the CLI looked in /run/user/<uid>. The state directory is
+  // the one location both resolve identically. The full reasoning is in
+  // src/status_cache.cpp.
   static std::string path();
 
   static bool publish(const DeviceStatus& status, const DeviceInfo& info);
   static std::optional<StatusSnapshot> read();
+
+  // Remove the snapshot. Called by the daemon on a clean exit; a missing file
+  // is success, since the postcondition is "no snapshot", not "one deleted".
+  static bool clear();
 };
 
 }  // namespace reed
