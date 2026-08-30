@@ -392,7 +392,7 @@ int cmd_daemon_start(const std::string& port, bool foreground,
     return true;
   };
 
-  restore(*device);
+  const bool restored_at_startup = restore(*device);
 
   if (state->hud.enabled) {
     std::cout << "Display restored with HUD (" << state->hud.metrics.size()
@@ -481,6 +481,29 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   auto reapply_at = clock::now() + std::chrono::seconds(25);
   bool reapplied = false;
 
+  // When the snapshot was last written, so the two publishers do not duplicate
+  // each other's work. Unset means "never", which makes the first tick publish.
+  std::optional<clock::time_point> last_publish;
+
+  // Seed it before the loop starts.
+  //
+  // Neither publisher below runs until its first deadline -- a keepalive tick
+  // at the earliest -- and this process deletes the file on the way out. So
+  // without this, every restart left `status` and `info` with nothing to read
+  // for up to a full keepalive interval, failing with "already open by PID
+  // ..." exactly as they did before the cache existed. Measured: exit 1 for
+  // the whole window, on a daemon that was up and healthy.
+  //
+  // Cheap to close: one `STATE all` at a point where the link has just been
+  // proven by the handshake inside restore().
+  if (restored_at_startup && device->is_connected()) {
+    if (auto seen = device->get_status()) {
+      if (reed::StatusCache::publish(*seen, device_info)) {
+        last_publish = clock::now();
+      }
+    }
+  }
+
   int failures = 0;
   while (g_running) {
     if (!reapplied && clock::now() >= reapply_at && device->is_connected()) {
@@ -520,9 +543,47 @@ int cmd_daemon_start(const std::string& port, bool foreground,
 
     if (now >= next_handshake) {
       next_handshake = now + std::chrono::seconds(keepalive_interval);
-      if (device->handshake()) {
+      if (auto info = device->handshake()) {
         failures = 0;
         first_handshake_ok = true;
+        device_info = *info;
+
+        // Publish from here when nothing else will.
+        //
+        // The telemetry push below is the cheaper publisher -- it reads the
+        // status off a frame it was sending anyway -- but it only runs when
+        // the HUD or a fixed fan duty asked for telemetry. A daemon showing a
+        // preset with no overlay pushes nothing, so `status` and `info` found
+        // no snapshot and fell through to a live read that cannot succeed
+        // while this process holds the port. That is the exact failure the
+        // cache exists to remove, in the configuration it is most likely to
+        // be in.
+        //
+        // `STATE all` with an empty body is the same read `status` performs
+        // when no daemon is running. Unlike `conn` it does not re-initialise
+        // the panel, so this costs one frame and nothing visible.
+        //
+        // Gated on the snapshot's age rather than on `push_telemetry`, so
+        // neither publisher can leave a gap. With the HUD on at its 5s
+        // default the push below always gets there first and this never
+        // fires; with the HUD off, or its interval set long -- it is clamped
+        // at 3600s -- this is what keeps the file inside
+        // StatusSnapshot::kStaleAfterSeconds instead of letting a healthy
+        // device read as stale between pushes.
+        //
+        // Not a strict either/or: when the two cadences coincide (a push
+        // interval that is a multiple of the keepalive), this fires and the
+        // push publishes again a moment later in the same tick. That costs
+        // one redundant `STATE all` at the coincidence, which is not worth a
+        // second piece of state to avoid.
+        if (!last_publish ||
+            now - *last_publish >= std::chrono::seconds(keepalive_interval)) {
+          if (auto seen = device->get_status()) {
+            if (reed::StatusCache::publish(*seen, device_info)) {
+              last_publish = now;
+            }
+          }
+        }
       } else {
         ++failures;
         std::cerr << "keepalive: handshake failed (#" << failures
@@ -592,7 +653,9 @@ int cmd_daemon_start(const std::string& port, bool foreground,
         // lets `status` and `info` work while the daemon holds the port.
         if (auto seen = device->push_sysinfo(build_sysinfo(labels, metrics),
                                               metrics.network)) {
-          reed::StatusCache::publish(*seen, device_info);
+          if (reed::StatusCache::publish(*seen, device_info)) {
+            last_publish = now;
+          }
         }
       }
     }
@@ -605,6 +668,17 @@ int cmd_daemon_start(const std::string& port, bool foreground,
     device->send_power_event("shutdown");
     if (verbose) std::cerr << "power: sent shutdown on exit\n";
   }
+
+  // Drop the snapshot on the way out. It describes a device this process was
+  // talking to, and once it stops there is nothing keeping it current. Leaving
+  // it behind matters most across a restart: the new daemon holds the port
+  // immediately, so `status` would answer from the previous run's file during
+  // the window before the first publish -- pre-restart data presented as
+  // current, which is worse than no answer.
+  //
+  // Only the clean exit is covered. A kill -9 leaves the file, which is what
+  // StatusSnapshot::stale() is for.
+  reed::StatusCache::clear();
 
   return 0;
 }
