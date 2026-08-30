@@ -1,7 +1,10 @@
 #include "cli_common.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <csignal>
 #include <fstream>
 #include <iostream>
@@ -96,6 +99,27 @@ std::optional<reed::DisplayState> load_state_for_update() {
             << "  Saving now would overwrite it with defaults. Fix or delete "
                "the file first.\n";
   return std::nullopt;
+}
+
+bool parse_int(const std::string& in, int* out) {
+  if (in.empty()) return false;
+  errno = 0;
+  char* end = nullptr;
+  const long v = std::strtol(in.c_str(), &end, 10);
+  // Reject trailing junk ("50abc"), leading junk ("abc" -> end == start),
+  // overflow, and anything outside int.
+  if (end == in.c_str() || *end != '\0') return false;
+  if (errno == ERANGE || v < INT_MIN || v > INT_MAX) return false;
+  *out = static_cast<int>(v);
+  return true;
+}
+
+bool save_state_or_report(const reed::DisplayState& state) {
+  if (reed::ConfigManager::save_state(state)) return true;
+  std::cerr << "Failed to write " << reed::ConfigManager::get_state_path()
+            << "\n"
+               "  The setting was NOT saved, so nothing will re-apply it.\n";
+  return false;
 }
 
 bool daemon_holds_port(const std::string& port) {

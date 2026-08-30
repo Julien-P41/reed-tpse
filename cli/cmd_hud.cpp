@@ -159,10 +159,7 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
     // anywhere reset hud_right.
     state.hud = reed::HudConfig{};
     state.hud_right.reset();
-    if (!reed::ConfigManager::save_state(state)) {
-      std::cerr << "Failed to save state\n";
-      return 1;
-    }
+    if (!save_state_or_report(state)) return 1;
 
     if (daemon_holds_port(port)) return defer_to_daemon("HUD cleared");
 
@@ -335,10 +332,7 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
   } else {
     state.hud = h;
   }
-  if (!reed::ConfigManager::save_state(state)) {
-    std::cerr << "Failed to save state\n";
-    return 1;
-  }
+  if (!save_state_or_report(state)) return 1;
 
   // Apply live if we have a device. Non-fatal if not connected — state is
   // saved and the daemon will apply it on next start.

@@ -35,6 +35,22 @@ std::vector<reed::SysinfoData> build_sysinfo(
 // saving over it would persist defaults across everything it held.
 std::optional<reed::DisplayState> load_state_for_update();
 
+// Strict integer parse: the whole string, or nothing.
+//
+// std::atoi returns 0 for "abc" and 0 for "0", with no way to tell them apart,
+// and every numeric flag in this CLI went through it. `brightness abc` passed
+// the 0-100 range check and turned the panel off.
+bool parse_int(const std::string& in, int* out);
+
+// Save it, or say why not. Returns false when the caller should give up.
+//
+// Most callers used to discard save_state()'s result and print success
+// regardless -- and several then went on to say "the daemon will apply it
+// within a second", which is a promise about a file that may never have been
+// written. The disk being full or the state directory being unwritable is
+// exactly when a user needs to be told.
+bool save_state_or_report(const reed::DisplayState& state);
+
 // Is the port held by a running daemon, as opposed to something else that
 // merely has it open? Only a daemon will apply a saved state, so only a daemon
 // justifies telling the user their change will be applied.

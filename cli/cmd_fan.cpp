@@ -146,7 +146,7 @@ int cmd_fan(const std::string& port,
     } else {
       st->fan_duty = tier_arg.empty() ? duty_arg : t->duty;
     }
-    reed::ConfigManager::save_state(*st);
+    if (!save_state_or_report(*st)) return 1;
     return defer_to_daemon("Fan setting");
   }
 
@@ -261,7 +261,7 @@ int cmd_fan(const std::string& port,
     } else {
       state->fan_duty = duty;
     }
-    reed::ConfigManager::save_state(*state);
+    if (!save_state_or_report(*state)) return 1;
 
     if (smart) {
       std::cout << "Fan set to Smart Mode on the " << wire_tier

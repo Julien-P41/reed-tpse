@@ -342,8 +342,20 @@ static std::string device_shell_quote(const std::string& in) {
 bool Adb::remove(const std::string& filename) {
   std::string remote_path = std::string(MEDIA_PATH) + filename;
   auto result = run_command(targeted({"shell", "rm", device_shell_quote(remote_path)}));
+  if (!result) return false;
 
-  return result && result->find("No such file") == std::string::npos;
+  // adb failing to reach the device is not a deletion.
+  //
+  // This checked only for "No such file", so `error: no devices/emulators
+  // found` -- adb complaining that it could do nothing at all -- came back as
+  // success, and `delete` printed "Deleted: x.mp4" for a file still sitting on
+  // the cooler. list_media() and list_presets() both already screen for
+  // "error:" for exactly this reason; remove() was the one that did not.
+  if (result->find("error:") != std::string::npos ||
+      result->find("adb:") != std::string::npos) {
+    return false;
+  }
+  return result->find("No such file") == std::string::npos;
 }
 
 }  // namespace reed

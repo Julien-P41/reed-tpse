@@ -401,7 +401,7 @@ int cmd_screen(const std::string& port, const std::string& arg,
   auto state = load_state_for_update();
   if (!state) return 1;
   state->screen_on = enable;
-  reed::ConfigManager::save_state(*state);
+  if (!save_state_or_report(*state)) return 1;
 
   if (daemon_holds_port(port)) {
     return defer_to_daemon("Panel power");
@@ -447,7 +447,9 @@ int cmd_sleep_display(const std::string& port, const std::string& arg,
   auto state = load_state_for_update();
   if (!state) return 1;
   state->display_in_sleep = enable;
-  reed::ConfigManager::save_state(*state);
+  // Saved once, here, and checked. This used to write the file twice -- once
+  // unchecked before the device call and again after it.
+  if (!save_state_or_report(*state)) return 1;
 
   if (daemon_holds_port(port)) {
     return defer_to_daemon("Sleep-display");
@@ -463,10 +465,6 @@ int cmd_sleep_display(const std::string& port, const std::string& arg,
   if (!device.set_display_in_sleep(enable)) {
     std::cerr << "No response to 'POST displayInSleep'\n";
     return 1;
-  }
-
-  if (!reed::ConfigManager::save_state(*state)) {
-    std::cerr << "Warning: could not persist sleep-display state\n";
   }
 
   std::cout << "Sleep display " << (enable ? "on" : "off") << ".\n";

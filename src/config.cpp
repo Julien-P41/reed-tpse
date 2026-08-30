@@ -184,7 +184,15 @@ std::optional<Config> ConfigManager::load_config(LoadStatus* status) {
 
 bool ConfigManager::save_config(const Config& config) {
   std::string dir = get_config_dir();
-  fs::create_directories(dir);
+  // error_code overload, like the loaders. The throwing one aborts the whole
+  // process on a directory it cannot create -- `terminate called after
+  // throwing an instance of std::filesystem_error`, SIGABRT, exit 134 -- which
+  // is what a read-only or unwritable XDG path produces. The read path was
+  // fixed for exactly this; the write path was not, so a save turned a
+  // reportable failure into a crash.
+  std::error_code dir_ec;
+  fs::create_directories(dir, dir_ec);
+  if (dir_ec) return false;
 
   picojson::object obj;
   obj["port"] = picojson::value(config.port);
@@ -308,7 +316,11 @@ std::optional<DisplayState> ConfigManager::load_state(LoadStatus* status) {
 
 bool ConfigManager::save_state(const DisplayState& state) {
   std::string dir = get_state_dir();
-  fs::create_directories(dir);
+  // See save_config: the throwing overload aborts the process rather than
+  // letting the caller report that nothing was saved.
+  std::error_code dir_ec;
+  fs::create_directories(dir, dir_ec);
+  if (dir_ec) return false;
 
   picojson::array media_arr;
   for (const auto& m : state.media) {

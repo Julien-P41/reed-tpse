@@ -151,7 +151,12 @@ static std::optional<reed::DisplayState> bootstrap_display_state() {
   // config-level brightness to seed it from any more.
   reed::DisplayState state;
   state.media = *media;
-  reed::ConfigManager::save_state(state);
+  if (!reed::ConfigManager::save_state(state)) {
+    // Not fatal: the daemon can run from this state in memory. But it will
+    // re-bootstrap on every start until the write succeeds, so say so once.
+    std::cerr << "warning: could not save the bootstrapped playlist to "
+              << reed::ConfigManager::get_state_path() << "\n";
+  }
   return state;
 }
 

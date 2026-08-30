@@ -65,7 +65,7 @@ int cmd_filter(const std::string& port, const std::string& name,
   state->filter = wire;
   if (opacity_given) state->filter_opacity = opacity;
 
-  reed::ConfigManager::save_state(*state);
+  if (!save_state_or_report(*state)) return 1;
   if (daemon_holds_port(port)) {
     return defer_to_daemon("Filter");
   }
@@ -150,7 +150,7 @@ int cmd_preset(const std::string& port, const std::vector<std::string>& args,
     if (!st) return 1;
     st->preset = match;
     st->media.clear();  // a preset and custom media are mutually exclusive
-    reed::ConfigManager::save_state(*st);
+    if (!save_state_or_report(*st)) return 1;
   }
   if (daemon_holds_port(port)) return defer_to_daemon("Preset " + match);
 
@@ -334,7 +334,7 @@ int cmd_display(const std::string& port,
   // `display` did whenever the daemon was running.
   if (brightness_given) state->brightness = brightness;
   state->preset.reset();  // custom media and a preset are mutually exclusive
-  reed::ConfigManager::save_state(*state);
+  if (!save_state_or_report(*state)) return 1;
 
   // Checked before the port is opened: connect() prints its own "already open
   // by PID ..." diagnostic, which is noise when handing over to the daemon is
@@ -390,7 +390,7 @@ int cmd_brightness(const std::string& port, int value, bool verbose) {
   auto state = load_state_for_update();
   if (!state) return 1;
   state->brightness = value;
-  reed::ConfigManager::save_state(*state);
+  if (!save_state_or_report(*state)) return 1;
 
   if (daemon_holds_port(port)) return defer_to_daemon("Brightness");
 
@@ -438,14 +438,23 @@ int cmd_delete(const std::vector<std::string>& files) {
     return 1;
   }
 
+  // Report failures in the exit status, not only on stderr. This returned 0
+  // even when every deletion failed, so a script could not tell a cleared
+  // device from an untouched one.
+  int failed = 0;
   for (const auto& f : files) {
     if (reed::Adb::remove(f)) {
       std::cout << "Deleted: " << f << "\n";
     } else {
       std::cerr << "Failed to delete: " << f << "\n";
+      ++failed;
     }
   }
 
+  if (failed) {
+    std::cerr << failed << " of " << files.size() << " not deleted.\n";
+    return 1;
+  }
   return 0;
 }
 
