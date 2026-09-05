@@ -1,8 +1,12 @@
 # Build the project and run the hardware-free checks.
 #
-# The suite is 91 assertions across three binaries -- frame protocol, config
-# round-trips, and payload shapes compared against captured vendor traffic.
-# None of it touches a device, so it runs anywhere. It was off by default and
+# The suite covers the frame protocol, config round-trips, payload shapes
+# against captured vendor traffic, and the status cache. None of it touches a
+# device, so it runs anywhere.
+#
+# No assertion count here on purpose: the last one said 91 across three
+# binaries and was wrong within a day of a fourth being added. ctest prints
+# what actually ran. It was off by default and
 # nothing ran it, which for a project whose commit log is largely "here is a
 # wire bug that looked like success" was the cheapest insurance left unbought.
 name: build and test

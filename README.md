@@ -183,7 +183,7 @@ install the unit, or try --system.
 ```
 
 Other options: `-DREED_SERVICE_USER=<name>` for the account the system unit
-runs as, `-DREED_BUILD_TESTS=ON` for the three hardware-free test binaries,
+runs as, `-DREED_BUILD_TESTS=ON` for the hardware-free test binaries,
 and `-DCMAKE_INSTALL_PREFIX=<path>` if `/usr/local` is not where you want it —
 both units and the sleep hook are templated on it.
 
