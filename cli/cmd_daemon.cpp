@@ -483,10 +483,17 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   using clock = std::chrono::steady_clock;
   auto now = clock::now();
   auto next_handshake = now + std::chrono::seconds(keepalive_interval);
-  // Telemetry is needed for the HUD *and* for a fixed fan duty -- the device
-  // only honours the fan profile while host data keeps arriving, and reverts
-  // to 100% when it stops. Schedule pushes if either wants them.
-  bool push_telemetry = state->hud.enabled || state->fan_duty.has_value() ||
+  // Telemetry is needed for the HUD *and* for any fan profile -- the device
+  // only honours one while host data keeps arriving, and reverts to 100% when
+  // it stops. Schedule pushes if either wants them.
+  //
+  // Keyed on fan_tier, not fan_duty. fan_duty is the marker for Fixed Mode and
+  // is deliberately UNSET for Smart Mode, so testing it excluded the one mode
+  // that cannot work without telemetry at all: a Smart profile with the HUD off
+  // installed a curve, pushed nothing, and left the fan at the firmware's 100%.
+  // `fan --smart` even warns that it "needs the daemon running", which was true
+  // and not sufficient -- the daemon ran and declined to push for it.
+  bool push_telemetry = state->hud.enabled || state->fan_tier.has_value() ||
                         (state->hud_right && state->hud_right->enabled);
   auto next_sysinfo =
       push_telemetry
@@ -565,7 +572,7 @@ int cmd_daemon_start(const std::string& port, bool foreground,
       report_ac = !config || config->report_ac_power;
       report_lock = !config || config->report_lock;
       report_shutdown = !config || config->report_shutdown;
-      push_telemetry = state->hud.enabled || state->fan_duty.has_value() ||
+      push_telemetry = state->hud.enabled || state->fan_tier.has_value() ||
                        (state->hud_right && state->hud_right->enabled);
       // Reloading without applying left the daemon holding settings it never
       // sent: any CLI change made while the daemon runs cannot touch the

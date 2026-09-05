@@ -408,6 +408,8 @@ reed-tpse fan mid
 reed-tpse fan high
 reed-tpse fan full
 reed-tpse fan --speed 45   # explicit duty, 0-100, for finer control
+reed-tpse fan low --smart  # follow CPU temperature along that tier's curve
+reed-tpse fan --speed 45 --smart   # same, with 45% as the fallback duty
 ```
 
 Pump RPM is not repeated here -- `reed-tpse status` reports it, and it is
@@ -432,6 +434,29 @@ but not linear (45% ≈ 2460, 65% ≈ 3150).
 
 `--speed <0-100>` sets any duty directly, pairing it with the curve of the
 nearest named tier -- KANALI never sends a duty without a curve beside it.
+
+### Fixed Mode and Smart Mode
+
+Without `--smart` the duty is pinned: `fan mid` holds 60% whatever the CPU is
+doing. With `--smart` the device follows the tier's curve against the CPU
+temperature being pushed to it, and the duty you gave becomes the fallback the
+firmware uses when it has nothing to interpolate from.
+
+Both modes send the same payload -- `{mode, smartMode, fixedMode}` with the
+curve *and* a numeric duty either way. Only `mode` differs, which is the
+vendor's own shape.
+
+⚠ **Neither mode does anything without telemetry.** The device evaluates a fan
+profile only when host data arrives and reverts to 100% when it stops, so the
+daemon has to be running and pushing. It now pushes whenever any fan tier is
+configured, with or without the HUD.
+
+That was not always true: the daemon keyed its decision on whether a *fixed
+duty* was set, and `--smart` deliberately leaves that unset. So a Smart profile
+with the HUD switched off installed a curve, pushed nothing, and left the fan at
+the firmware's 100% -- the one configuration that needs telemetry most was the
+one that did not get it. Fixed in this fork; if you are running an older build,
+enable the HUD alongside Smart Mode or use a fixed duty.
 
 #### How it actually works
 
