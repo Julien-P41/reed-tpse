@@ -46,6 +46,11 @@ std::string Media::get_converted_name(const std::string& original) {
   return get_basename(original) + ".mp4";
 }
 
+std::string Media::device_name(const std::string& input) {
+  return detect_type(input) == MediaType::Gif ? get_converted_name(input)
+                                              : get_filename(input);
+}
+
 bool Media::is_ffmpeg_available() {
   return std::system("ffmpeg -version > /dev/null 2>&1") == 0;
 }

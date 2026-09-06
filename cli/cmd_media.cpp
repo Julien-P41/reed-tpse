@@ -272,13 +272,17 @@ int cmd_display(const std::string& port,
   // to reference a file the device does not have. The firmware does not check
   // either: an unresolvable name simply blanks the panel, which reads as a
   // display fault. Verify against the device's own listing first.
+  // Reduce to the bare name the device actually stores under.
+  //
+  // `upload` pushes with get_filename(), so /sdcard/pcMedia only ever holds
+  // basenames -- a path could never match. The gif branch already reduced one
+  // (get_converted_name takes the stem) and the other branch did not, so
+  // `display /path/x.gif` worked while `display /path/x.mp4` reported "Not on
+  // device" for a file that was sitting right there. Tab-completing a local
+  // path is the obvious way to hit it.
   std::vector<std::string> media_files;
   for (const auto& f : files) {
-    if (reed::Media::detect_type(f) == reed::MediaType::Gif) {
-      media_files.push_back(reed::Media::get_converted_name(f));
-    } else {
-      media_files.push_back(f);
-    }
+    media_files.push_back(reed::Media::device_name(f));
   }
 
   if (reed::Adb::is_device_connected()) {
@@ -435,7 +439,10 @@ int cmd_delete(const std::vector<std::string>& files) {
   // even when every deletion failed, so a script could not tell a cleared
   // device from an untouched one.
   int failed = 0;
-  for (const auto& f : files) {
+  for (const auto& raw : files) {
+    // The device stores basenames; a path would be pasted onto MEDIA_PATH and
+    // delete nothing.
+    const std::string f = reed::Media::device_name(raw);
     if (reed::Adb::remove(f)) {
       std::cout << "Deleted: " << f << "\n";
     } else {
@@ -482,11 +489,9 @@ int cmd_lock_display(const std::vector<std::string>& args, int brightness,
     return 0;
   }
 
-  // Same rule as `display`: a .gif is stored as .mp4 once uploaded.
-  std::string media = arg;
-  if (reed::Media::detect_type(media) == reed::MediaType::Gif) {
-    media = reed::Media::get_converted_name(media);
-  }
+  // Same rule as `display`: a .gif is stored as .mp4 once uploaded, and a path
+  // is reduced to the name the device holds.
+  const std::string media = reed::Media::device_name(arg);
 
   if (reed::Adb::is_device_connected()) {
     if (auto on_device = reed::Adb::list_media()) {
