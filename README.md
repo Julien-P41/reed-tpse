@@ -80,9 +80,19 @@ Open:
       validate, so it never names its field in an exception, and KANALI 1.2.1
       has no UI control for it, so there is nothing to capture. Needs a build
       of the vendor app that exposes the toggle.
-- [ ] Custom overlay layouts. The firmware places metrics itself: three at
-      most, mid-height, with only `align` (Left/Center/Right) under host
-      control. Anything else means compositing frames host-side.
+
+Closed by measurement, so nobody has to work it out again:
+
+- **Custom overlay layouts.** The firmware places metrics itself -- three at
+  most, mid-height, `align` the only placement control. Going past that means
+  rendering frames on the host and pushing them as media, which was built and
+  measured: it costs a **black frame on every update**, because the device
+  caches media by filename and new content always needs a new name. No
+  lower-level path either -- the framebuffer is not reachable by adb's shell
+  user, and SurfaceFlinger holds DRM master with SELinux enforcing. Details in
+  [docs/firmware-notes.md](docs/firmware-notes.md#media-is-cached-by-filename-and-a-miss-costs-a-black-frame).
+  For a custom look, draw it in an image editor and `upload` it; the HUD
+  renders on top of whatever is there.
 
 Done in this fork: `status`, `raw`, `fan` (vendor tiers, arbitrary duty and
 Smart Mode curves), `screen`, `rotate`, `preset`, `sleep-display`, `filter`,

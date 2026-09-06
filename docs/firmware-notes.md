@@ -299,6 +299,45 @@ Two ways to actually get a black panel:
 - `displayInSleep` set to **false**, then let the ~60s disconnect timeout
   expire. See below -- the field reads backwards.
 
+### Media is cached by filename, and a miss costs a black frame
+
+Measured on V1.0.11 by driving the panel directly and watching it.
+
+The device keeps decoded media keyed by **filename**. Showing a name it already
+holds is instant. Showing one it does not costs a visible black frame while it
+loads. Overwriting a file under a name the device already knows changes
+nothing on screen -- it keeps serving the cached copy.
+
+| what was done | what the panel did |
+|---|---|
+| two filenames alternating, `Loop`, device advancing on its own | no visible flicker |
+| six filenames, `Loop`, device advancing on its own | black frame at every change |
+| one filename, overwritten and re-applied repeatedly | never changed |
+| a fresh filename each time, same rate | changed correctly, with a flicker |
+
+Two frames stay resident and swap cleanly; six do not, so every advance is a
+cold load. The flicker belongs to the load, not to the command -- a `Loop`
+playlist the host never touches flickers just the same once it outgrows what
+the device holds.
+
+⚠ Do not push over a file the running playlist is using. The device is left
+holding something it cannot decode and the panel goes black until the media is
+re-applied.
+
+**The overlay is the exception.** `POST preset` carries styling and metrics with
+no media in the frame, and updates without disturbing the clip or flickering --
+which is how the vendor's own HUD refreshes. The values it draws are the ones
+the host pushes with `STATE all`, so live data on the panel costs nothing. The
+limit is the firmware's: three metrics, a fixed label vocabulary, mid-height,
+`align` the only placement control.
+
+The practical consequence is that anything richer than that -- more metrics,
+graphs, arbitrary placement -- has to change the media, and changing the media
+to something new always costs the black frame. Below the vendor protocol there
+is no way around it either: `/dev/graphics/fb0` is `root:graphics` and adb's
+shell user is not in that group, and while `/dev/dri/card0` is world-writable
+SurfaceFlinger holds DRM master with SELinux enforcing.
+
 ### `displayInSleep` reads backwards
 
 It is the device's own "display something while the host is asleep", not
