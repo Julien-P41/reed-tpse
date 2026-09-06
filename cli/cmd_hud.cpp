@@ -193,9 +193,14 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
                                                       : state.hud;
   h.enabled = true;
   bool metrics_provided = false;
+  // Set by next() when a flag's value is missing; checked at the end of each
+  // iteration so the branch finishes without acting on a value it never got.
+  bool missing_value = false;
 
   for (size_t i = 1; i < args.size(); ++i) {
     const std::string& a = args[i];
+    // Sets a flag rather than calling std::exit, so this returns 1 like every
+    // other error path in the function.
     auto next = [&](const char* flag) -> std::string {
       if (++i >= args.size()) {
         std::cerr << "Missing value for " << flag << "\n";
@@ -207,7 +212,8 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
                        "  the value never arrived. Drop the # or quote it: "
                        "--color 00FF00\n";
         }
-        std::exit(1);
+        missing_value = true;
+        return {};
       }
       return args[i];
     };
@@ -264,6 +270,8 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
       std::cerr << "Unknown hud option: " << a << "\n";
       return 1;
     }
+
+    if (missing_value) return 1;
   }
 
   if (!metrics_provided && h.metrics.empty()) {

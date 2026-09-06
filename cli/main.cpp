@@ -171,25 +171,37 @@ int main(int argc, char* argv[]) {
   std::string command;
   std::vector<std::string> args;
 
+  // Set by the value-taking helpers below when an argument is missing or
+  // malformed. Checked at the end of each iteration so the offending branch
+  // finishes without acting on a value it never got.
+  bool arg_error = false;
+
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
 
     // Every value-taking flag reports a missing value. Three of them used to
     // consume nothing and carry on with the previous value, so `-p` with a
     // typo'd path silently used config.json's port instead.
+    // These set a flag rather than calling std::exit. Exiting from inside an
+    // argument loop skips main's own cleanup and makes the parser the one
+    // place in the program that cannot be reasoned about from its return type;
+    // every other error path here returns 1.
     auto need_value = [&](const char* flag) -> const char* {
       if (++i >= argc) {
         std::cerr << flag << " needs a value\n";
-        std::exit(1);
+        arg_error = true;
+        return "";
       }
       return argv[i];
     };
     auto need_int = [&](const char* flag) -> int {
       const std::string raw = need_value(flag);
+      if (arg_error) return 0;
       int v = 0;
       if (!parse_int(raw, &v)) {
         std::cerr << flag << " needs a whole number (got \"" << raw << "\")\n";
-        std::exit(1);
+        arg_error = true;
+        return 0;
       }
       return v;
     };
@@ -204,7 +216,7 @@ int main(int argc, char* argv[]) {
       fan_smart = true;
     } else if (arg == "--opacity") {
       filter_opacity = need_int("--opacity");
-      if (filter_opacity < 0 || filter_opacity > 100) {
+      if (!arg_error && (filter_opacity < 0 || filter_opacity > 100)) {
         std::cerr << "--opacity must be 0-100\n";
         return 1;
       }
@@ -240,7 +252,7 @@ int main(int argc, char* argv[]) {
       // and the firmware silently ignores a value it does not recognise, so a
       // typo produced a command that returned 200 and did nothing.
       ratio = need_value("--ratio");
-      if (ratio != "2:1" && ratio != "1:1") {
+      if (!arg_error && ratio != "2:1" && ratio != "1:1") {
         std::cerr << "Unknown --ratio: \"" << ratio << "\"  (2:1 | 1:1)\n";
         return 1;
       }
@@ -261,7 +273,7 @@ int main(int argc, char* argv[]) {
       fan_speed = need_int("--speed");
     } else if (arg == "--watch") {
       watch = need_int("--watch");
-      if (watch < 0) {
+      if (!arg_error && watch < 0) {
         std::cerr << "--watch must be a positive number of seconds\n";
         return 1;
       }
@@ -294,6 +306,8 @@ int main(int argc, char* argv[]) {
     } else {
       args.push_back(arg);
     }
+
+    if (arg_error) return 1;
   }
 
   if (command.empty()) {
