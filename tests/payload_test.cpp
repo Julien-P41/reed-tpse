@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 static int failures = 0;
 
@@ -40,6 +41,17 @@ static void same(const std::string& what, const std::string& got,
     ++failures;
     std::cout << "    ours:   " << a << "\n    vendor: " << b << "\n";
   }
+}
+
+// The PcInfo blob carries a wall-clock timestamp, which is the one field a
+// golden cannot fix. Everything else must match exactly.
+static std::string without_timestamp(const std::string& json) {
+  picojson::value v;
+  if (!picojson::parse(v, json).empty()) return "<unparseable>";
+  if (!v.is<picojson::object>()) return "<not an object>";
+  picojson::object o = v.get<picojson::object>();
+  o.erase("timestamp");
+  return picojson::value(o).serialize();
 }
 
 static void check(const std::string& what, bool ok) {
@@ -369,6 +381,123 @@ int main() {
          R"("sysinfoDisplay":["CPU Temperature"]})");
     check("no empty media list", frame.find("\"media\"") == std::string::npos);
     check("no screenMode", frame.find("screenMode") == std::string::npos);
+  }
+
+
+  // ---- PcInfo: the telemetry blob, pushed every few seconds ----
+  //
+  // Untested until now, which mattered because the label-to-field mapping was
+  // rewritten from a hand-written if/else chain into a table. A refactor of the
+  // one payload nothing checked.
+  //
+  // The expected JSON below was captured from the implementation as it stood
+  // BEFORE that rewrite, and is written out here rather than derived from
+  // reed/hud.hpp. That independence is the whole point: a golden built from the
+  // same table as the code would agree with a corrupted table, exactly as
+  // wire.hpp says of the string constants. Regenerating this from the current
+  // code to make a failing test pass would destroy its value.
+  {
+    reed::Device dev("/dev/null", false);  // the constructor opens nothing
+
+    struct Sample {
+      const char* label;
+      const char* value;
+    };
+    // Every label the firmware knows, plus Date&Time (drawn from the device's
+    // own clock, so it contributes nothing) and one label that does not exist.
+    const Sample samples[] = {
+        {"CPU Temperature", "61"},        {"CPU Frequency", "4212"},
+        {"CPU Usage", "12.3"},            {"CPU Voltage", "1.234"},
+        {"CPU Power", "45.7"},            {"GPU Temperature", "53"},
+        {"GPU Frequency", "2100"},        {"GPU Usage", "33"},
+        {"GPU Voltage", "0.988"},         {"GPU Power", "210.4"},
+        {"Motherboard Temperature", "36"},{"Memory Frequency", "6000"},
+        {"Memory Utilization", "47.9"},   {"Memory Temperature", "41"},
+        {"Hard Disk Temperature", "40"},  {"Date&Time", "0"},
+        {"Not A Real Label", "999"},
+    };
+    std::vector<reed::SysinfoData> data;
+    for (const auto& sample : samples) {
+      reed::SysinfoData d;
+      d.label = sample.label;
+      d.value = sample.value;
+      d.unit = "x";
+      data.push_back(d);
+    }
+
+    reed::NetworkMetrics net;
+    net.download_kbps = 902.61;  // rounded at the wire; the vendor sends ints
+    net.upload_kbps = 37.4;
+
+    const std::string body = dev.sysinfo_body(data, net);
+
+    same("PcInfo blob matches the pre-refactor capture",
+         without_timestamp(body),
+         R"({"cpu":{"fanAverage":0,"load":12.3,"power":45.7,"speedAverage")"
+         R"(:4212,"temperature":61,"voltage":1.234},)"
+         R"("disk":{"activity":0,"load":0,"readSpeed":0,"temperature":40,")"
+         R"(total":0,"used":0,"writeSpeed":0},)"
+         R"("fans":[],"gpu":{"fan":0,"load":33,"power":210.4,"speed":2100,)"
+         R"("temperature":"53","voltage":0.988},)"
+         R"("memory":{"load":47.9,"speed":6000,"temperature":41,"total":0,)"
+         R"("used":0},)"
+         R"("motherboard":{"temperature":36},)"
+         R"("network":{"download":903,"upload":37}})");
+
+    // An empty push must still carry the full skeleton -- the firmware reads
+    // fields it was not given, and a missing object is not the same as zero.
+    same("empty push still sends every field",
+         without_timestamp(dev.sysinfo_body({}, {})),
+         R"({"cpu":{"fanAverage":0,"load":0,"power":0,"speedAverage":0,"te)"
+         R"(mperature":0,"voltage":0},)"
+         R"("disk":{"activity":0,"load":0,"readSpeed":0,"temperature":0,"t)"
+         R"(otal":0,"used":0,"writeSpeed":0},)"
+         R"("fans":[],"gpu":{"fan":0,"load":0,"power":0,"speed":0,"tempera)"
+         R"(ture":"0","voltage":0},)"
+         R"("memory":{"load":0,"speed":0,"temperature":0,"total":0,"used":)"
+         R"(0},)"
+         R"("motherboard":{"temperature":0},)"
+         R"("network":{"download":0,"upload":0}})");
+
+    // Called out separately because the golden above would still pass if these
+    // were wrong in a compensating way, and because each has been a real bug
+    // or is one field away from becoming one.
+    picojson::value parsed;
+    const bool parses = picojson::parse(parsed, body).empty() &&
+                        parsed.is<picojson::object>();
+    check("blob parses as an object", parses);
+    if (parses) {
+      const picojson::object& o = parsed.get<picojson::object>();
+
+      const picojson::value& gpu = o.at("gpu");
+      check("GPU temperature is a STRING, unlike every other temperature",
+            gpu.get<picojson::object>().at("temperature").is<std::string>());
+      check("CPU temperature is a number",
+            o.at("cpu").get<picojson::object>().at("temperature").is<double>());
+
+      // Two labels that route to different objects under similar names --
+      // CPU Frequency is cpu.speedAverage, GPU Frequency is gpu.speed.
+      check("CPU Frequency lands in cpu.speedAverage",
+            o.at("cpu").get<picojson::object>().at("speedAverage").get<double>()
+                == 4212);
+      check("GPU Frequency lands in gpu.speed",
+            gpu.get<picojson::object>().at("speed").get<double>() == 2100);
+
+      check("network figures are rounded to integers",
+            o.at("network").get<picojson::object>().at("download").get<double>()
+                == 903);
+      check("fans is present and empty",
+            o.at("fans").is<picojson::array>() &&
+                o.at("fans").get<picojson::array>().empty());
+
+      // Date&Time and unknown labels must not invent a field anywhere.
+      check("Date&Time adds no field to the blob",
+            o.size() == 8);  // cpu gpu memory motherboard disk network fans timestamp
+
+      const double ts = o.at("timestamp").get<double>();
+      check("timestamp is a plausible epoch in milliseconds",
+            ts > 1.6e12 && ts < 4.0e12);
+    }
   }
 
   std::printf("%s\n", failures ? "FAILURES" : "all checks passed");
