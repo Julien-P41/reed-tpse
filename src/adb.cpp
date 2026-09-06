@@ -1,5 +1,7 @@
 #include "reed/adb.hpp"
 
+#include "reed/adb_parse.hpp"
+
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -22,21 +24,6 @@ constexpr const char* kUiPackage = "com.baiyi.homeui.tkcfanhomeui";
 constexpr const char* kProduct = "cm01";
 }  // namespace
 
-
-namespace {
-
-bool devices_output_has_device(const std::string& output) {
-  std::istringstream iss(output);
-  std::string line;
-  while (std::getline(iss, line)) {
-    if (line.find("\tdevice") != std::string::npos) {
-      return true;
-    }
-  }
-  return false;
-}
-
-}  // namespace
 
 // Runs adb directly via fork/execvp -- no shell.
 //
@@ -186,35 +173,7 @@ static std::optional<std::string> target_serial() {
   auto out = Adb::devices_verbose();
   if (!out) return serial;
 
-  std::vector<std::string> online;
-  std::istringstream iss(*out);
-  std::string line;
-  while (std::getline(iss, line)) {
-    const size_t tab = line.find_first_of(" \t");
-    if (tab == std::string::npos) continue;
-    if (line.find("\tdevice") == std::string::npos &&
-        line.find(" device ") == std::string::npos) {
-      continue;
-    }
-    const std::string id = line.substr(0, tab);
-    if (id.empty() || id == "List") continue;
-    online.push_back(id);
-
-    // Strongest match first: the adb device on the same USB port as the serial
-    // port in use. That is the same physical cooler by construction.
-    const std::string& want = bound_usb_port();
-    if (!want.empty() &&
-        line.find("usb:" + want) != std::string::npos) {
-      serial = id;
-      return serial;
-    }
-    if (want.empty() &&
-        line.find(std::string("product:") + kProduct) != std::string::npos) {
-      serial = id;
-      return serial;
-    }
-  }
-  if (online.size() == 1) serial = online.front();
+  serial = adb_parse::select_serial(*out, bound_usb_port(), kProduct);
   return serial;
 }
 
@@ -233,7 +192,7 @@ std::optional<std::string> Adb::devices_verbose() {
 
 bool Adb::is_device_connected() {
   auto result = run_command({"devices"});
-  if (result && devices_output_has_device(*result)) {
+  if (result && adb_parse::has_online_device(*result)) {
     return true;
   }
 
@@ -254,7 +213,7 @@ bool Adb::is_device_connected() {
   run_command({"kill-server"});
   run_command({"start-server"});
   result = run_command({"devices"});
-  return result && devices_output_has_device(*result);
+  return result && adb_parse::has_online_device(*result);
 }
 
 bool Adb::push(const std::string& local_path, const std::string& remote_name) {
@@ -271,58 +230,14 @@ bool Adb::push(const std::string& local_path, const std::string& remote_name) {
 
 std::optional<std::vector<std::string>> Adb::list_media() {
   auto result = run_command(targeted({"shell", "ls", "-1", MEDIA_PATH}));
-
-  if (!result) {
-    return std::nullopt;
-  }
-
-  if (result->find("No such file") != std::string::npos ||
-      result->find("error:") != std::string::npos) {
-    return std::vector<std::string>{};
-  }
-
-  std::vector<std::string> files;
-  std::istringstream iss(*result);
-  std::string line;
-
-  while (std::getline(iss, line)) {
-    while (!line.empty() &&
-           (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) {
-      line.pop_back();
-    }
-    if (!line.empty()) {
-      files.push_back(line);
-    }
-  }
-
-  return files;
+  if (!result) return std::nullopt;
+  return adb_parse::media_list(*result);
 }
 
 std::optional<std::vector<std::string>> Adb::list_presets() {
   auto result = run_command(targeted({"shell", "ls", "-1", PRESET_PATH}));
   if (!result) return std::nullopt;
-  if (result->find("No such file") != std::string::npos ||
-      result->find("error:") != std::string::npos) {
-    return std::vector<std::string>{};
-  }
-
-  std::vector<std::string> presets;
-  std::istringstream iss(*result);
-  std::string line;
-  while (std::getline(iss, line)) {
-    while (!line.empty() &&
-           (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) {
-      line.pop_back();
-    }
-    if (line.size() <= 4 || line.compare(line.size() - 4, 4, ".mp4") != 0) {
-      continue;
-    }
-    line.erase(line.size() - 4);
-    // The sleep animation is not a selectable preset.
-    if (line == "standby") continue;
-    presets.push_back(line);
-  }
-  return presets;
+  return adb_parse::preset_list(*result);
 }
 
 std::optional<bool> Adb::ui_ready() {
@@ -332,10 +247,7 @@ std::optional<bool> Adb::ui_ready() {
   // adb complaining is not an answer about the UI. Its messages are prefixed
   // "adb:" or "error:" -- neither contains a digit, so they used to read as
   // "process absent" and start a 45s wait for a device that was not listening.
-  if (out->find("error:") != std::string::npos ||
-      out->find("adb:") != std::string::npos) {
-    return std::nullopt;
-  }
+  if (adb_parse::is_adb_error(*out)) return std::nullopt;
 
   // pidof prints nothing and exits non-zero when the process is absent.
   return out->find_first_of("0123456789") != std::string::npos;
@@ -345,31 +257,9 @@ bool Adb::reboot() {
   return run_command(targeted({"reboot"})).has_value();
 }
 
-// Single-quote for the DEVICE's shell.
-//
-// `adb shell` is not execve: adb joins its arguments and hands the result to a
-// shell on the cooler, so a filename containing ;, |, $(...) or a backtick is
-// interpreted there. Closing the host-side injection did not close this one --
-// they are two different shells, and only the first was fixed.
-//
-// POSIX single quotes protect everything except a single quote itself, which
-// is emitted as '\'' -- close, escape, reopen.
-static std::string device_shell_quote(const std::string& in) {
-  std::string out = "'";
-  for (char c : in) {
-    if (c == '\'') {
-      out += "'\\''";
-    } else {
-      out += c;
-    }
-  }
-  out += "'";
-  return out;
-}
-
 bool Adb::remove(const std::string& filename) {
   std::string remote_path = std::string(MEDIA_PATH) + filename;
-  auto result = run_command(targeted({"shell", "rm", device_shell_quote(remote_path)}));
+  auto result = run_command(targeted({"shell", "rm", adb_parse::device_shell_quote(remote_path)}));
   if (!result) return false;
 
   // adb failing to reach the device is not a deletion.
