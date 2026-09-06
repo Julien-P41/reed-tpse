@@ -309,6 +309,18 @@ reed-tpse daemon status          # Check daemon status
 Add `--system` to any `daemon` subcommand to address the system-scope unit
 instead of the user-scope one.
 
+### Global options
+
+These apply to any command that talks to the device.
+
+| | |
+|---|---|
+| `-p`, `--port <path>` | pin the serial port instead of auto-detecting. Takes precedence over `port` in `config.json`. With the udev rule installed, `/dev/tryx-panorama` is the stable name to use |
+| `-v`, `--verbose` | show the auto-detection, the frames sent and received as hex, and what the daemon is doing |
+| `--ratio <2:1\|1:1>` | aspect ratio for `display`. Persisted like the media itself, so it sticks until changed |
+
+Everything else is per-command and listed by `reed-tpse --help`.
+
 ### Playlists
 
 `display` takes more than one file, and `--play-mode` decides how the device
