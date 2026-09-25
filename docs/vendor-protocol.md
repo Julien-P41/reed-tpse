@@ -28,12 +28,38 @@ device ->  1 200\r\nAckNumber=463\r\nContentLength=0\r\nContentType=json\r\n\r\n
 ```
 
 - The host numbers its own frames with **`SeqNumber`** and stamps **`Date`**
-  (epoch ms). Only the device replies with `AckNumber`, echoing the SeqNumber.
-  We send `AckNumber` on requests — i.e. we format requests like responses. It
-  works, but it is not what the vendor does.
+  (epoch ms); only the device sends `AckNumber`. We used to send `AckNumber` on
+  requests — formatting requests like responses — which the device parsed while
+  logging `SeqNumber=-1` for every one.
+- ⚠ **`AckNumber` is not an echo.** It tracks `SeqNumber` in captures like the
+  one above, which is what made it look like one, but it is the device's own
+  counter: measured on a fresh connection, `SeqNumber=1` out came back
+  `AckNumber=2`. **Replies are matched by order and nothing else** — correlating
+  on `AckNumber` was tried and broke every command. See the warning on
+  `Response::ack` in `include/reed/protocol.hpp`.
 - The version token is `1`, and a response's first line is `1 <status>`.
 - `conn` and `config` get **no response at all**. The first ACK in every
   capture belongs to the frame after them.
+
+### The full method and header vocabulary
+
+Captures only show what the vendor happened to send. KANALI 2.4.0's own enums
+give the whole set, and it is larger than what appears above:
+
+| | |
+|---|---|
+| **Methods** | `GET` · `POST` · `STATE` · **`DELETE`** |
+| **Headers** | `SeqNumber` · `AckNumber` · `ContentLength` · `ContentType` · `FileName` · `FileBlockId` · `FileSize` · `ContentRange` · `Counter` · `Date` · `Id` · `Option` |
+| **ContentType** | `text` · `json` · `xml` · `png` · `jpg` · `gif` · `mp4` · `avi` · `pdf` |
+
+Four methods, not the two this document described, and twelve headers. The
+four file headers belong to the block transfer — see *Media upload* below.
+`png` and `jpg` being accepted content types is the interesting part of the
+third row.
+
+⚠ Declared by the host app is not the same as implemented by **our** firmware.
+None of `DELETE`, the file headers or the image content types has been tried
+against V1.0.11.
 
 ## Telemetry: `STATE all`, not `POST all`
 
@@ -251,12 +277,35 @@ That is the **adb wire protocol**, pushing to `/sdcard/pcMedia/` — the same
 path and the same mechanism `reed-tpse upload` already uses. KANALI bundles
 `adb.exe` for exactly this.
 
-So there is no serial file transfer to implement, and the adb dependency is not
-something the vendor avoids. `transport`/`transported` are announce/confirm
-envelopes around an adb push; we skip them deliberately, because sending them
+For **this** transfer the bytes went over adb, and the adb dependency is not
+something the vendor avoids. `transport`/`transported` acted as announce and
+confirm around an adb push; we skip them deliberately, because sending them
 would make `upload` need the serial port, which the daemon holds with
 TIOCEXCL. (KANALI does not compute the MD5 either — it sends the literal
 string `todo`.)
+
+⚠ **This section used to end "so there is no serial file transfer to
+implement". That conclusion was wrong, and it stood for months.** The timing
+argument above is sound — 3.3 MB cannot cross a 115200 line in 0.5 s — but it
+only proves *this* file went another way. It does not prove the serial path
+does not exist, and the reply in the capture above says as much: a device with
+no block protocol has no reason to answer with **`blockMaxSize`**.
+
+KANALI 2.4.0 carries the whole mechanism:
+
+```
+POST transport    {"type":<n>,"fileSize":<n>,"fileName":"<basename>"}
+                  -- vendor waits 300 ms for the reply
+                  -- then ceil(fileSize / 1024) blocks, carried by the
+                     FileName / FileBlockId / FileSize / ContentRange headers
+POST transported
+```
+
+with a `Transport → Transporting → Transported → Idle` state machine. At 1 KB
+blocks over 115200 that is roughly 90 s per megabyte, which is exactly why
+video goes over adb — the serial path exists and is simply too slow for video.
+Whether **V1.0.11** implements it is untested; see
+[firmware-v2-dissection.md](firmware-v2-dissection.md) §5 and Q1.
 
 ## Everything else, verbatim
 

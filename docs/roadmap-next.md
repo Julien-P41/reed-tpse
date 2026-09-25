@@ -20,11 +20,29 @@ wave 1 has answered.
 Three documented facts are wrong. They cost nothing to fix and they are
 actively misleading anyone who reads the docs, including future me.
 
+**Status: done, 2026-09-25.**
+
 | # | Change | File | Evidence |
 |---|---|---|---|
-| 0.1 | The panoRK stack is **RK3566**, not RK3568 — the same SoC as ours | `firmware-notes.md`, README | `/info/rockchip_config`: `RK_CHIP="rk3566"` |
-| 0.2 | v2 USB identity is **`0x391A:0x1011`** (printer class), not `0x6666:0x0066` | `firmware-notes.md` | `/usr/bin/usbdevice`; `0x0066` is the fallback branch |
+| 0.1 | The panoRK stack is **RK3566**, not RK3568 — the same SoC as ours | *not in this repo* | `/info/rockchip_config`: `RK_CHIP="rk3566"` |
+| 0.2 | v2 USB identity is **`0x391A:0x1011`** (printer class), not `0x6666:0x0066` | *not in this repo* | `/usr/bin/usbdevice`; `0x0066` is the fallback branch |
 | 0.3 | The protocol has **four** methods (`GET/POST/STATE/DELETE`) and twelve headers, not two and four | `vendor-protocol.md` | KANALI 2.4.0 enums |
+| 0.6 | **`AckNumber` is not an echo** — doc said it was; the code already knew better | `vendor-protocol.md` | measured: `SeqNumber=1` out, `AckNumber=2` back |
+
+⚠ **0.1 and 0.2 were mis-filed when this plan was written.** Both wrong claims
+live in the knowledge base's `aio-lcd-setup.md`, not in this repository — a
+search here for `RK3568` or `0x6666` returns nothing outside the dissection
+doc. They are handover items for the KB steward, not commits. The plan asserted
+a file list without checking it; that is the same failure mode the dissection
+doc is full of corrections for.
+
+**0.6 was not in the original plan.** `vendor-protocol.md` said the device
+replies with `AckNumber` "echoing the SeqNumber", on the strength of a capture
+where both read `463`. The code contradicts it in three places with a
+measurement — `SeqNumber=1` out, `AckNumber=2` back on a fresh connection — and
+warns that correlating on it "was tried and broke every command". The document
+was the stale copy. Doc/code drift of exactly the kind an audit is supposed to
+catch, and the last one did not.
 
 **0.4 — restate the media-transfer conclusion.** `vendor-protocol.md` says
 media moves over adb *because no serial file transfer exists*. The reasoning

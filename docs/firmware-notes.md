@@ -249,7 +249,32 @@ shows normal orientation, Android's `mRotation` stays `0`, nothing is logged at
 boot, and the value lives in the app's own `/data`, which needs root to read.
 
 KANALI 1.2.1 has no UI control for it, so no capture of the vendor sending it
-exists either. Settling this needs a build of the app that exposes the toggle.
+exists either. Settling this needed a build of the app that exposes the toggle.
+
+### What KANALI 2.4.0 says it is
+
+2.4.0 has it, and it is **not a device flag at all**. The host derives two
+rotations from two booleans and sends those:
+
+```js
+displayConfig = { backlightBrightness, backlightEnable,
+                  mirror: false, uiRotation: 0, mediaRotation: 0 }
+
+mirrorMode && waterfallMode  ->  uiRotation = 90,  mediaRotation = 180
+mirrorMode                   ->  uiRotation = 0,   mediaRotation = 180
+waterfallMode                ->  uiRotation = 90,  mediaRotation = 0
+```
+
+So waterfall rotates the **UI layer** 90° and leaves the media alone, while
+mirror rotates the media 180°. That is exactly the reading above -- it moves
+the sysinfo overlay, not the media -- and it is now the vendor's own code
+saying so rather than an inference from firmware symbols.
+
+⚠ **This does not give us a payload.** `displayConfig`/`uiRotation` belong to
+the **v2** schema (`rkConfig`, Buildroot firmware), not to V1.0.11's
+`waterBlockScreen` family. The concept is settled; how to ask *our* firmware
+for it is still unknown, and 2.4.0's v1 command set has no `waterfallMode`
+endpoint. See [firmware-v2-dissection.md](firmware-v2-dissection.md) §6.
 
 `adb reboot` restarts the AIO alone -- no PC shutdown needed, and this hardware
 records `reboot,shell` in `persist.sys.boot.reason.history` from previous ones.

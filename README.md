@@ -76,10 +76,14 @@ behaviour behind these features in
 
 Open:
 
-- [ ] `waterfallMode` -- the payload key is unknown. The handler does not
-      validate, so it never names its field in an exception, and KANALI 1.2.1
-      has no UI control for it, so there is nothing to capture. Needs a build
-      of the vendor app that exposes the toggle.
+- [ ] `waterfallMode` -- **what it is, is now answered; how to ask for it is
+      not.** KANALI 2.4.0 has the control, and there it is not a device flag:
+      the host derives `uiRotation`/`mediaRotation` from `mirrorMode` and
+      `waterfallMode` and sends those. Waterfall rotates the overlay 90° and
+      leaves the media alone. But that is the **v2** schema, and 2.4.0's v1
+      command set has no `waterfallMode` endpoint at all -- so the payload key
+      for V1.0.11 is still unknown, and may not exist.
+      See [docs/firmware-v2-dissection.md](docs/firmware-v2-dissection.md) §6.
 
 Closed by measurement, so nobody has to work it out again:
 
