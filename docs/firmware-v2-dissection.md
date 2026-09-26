@@ -455,21 +455,37 @@ documentation: the usage text said "METHOD is POST (write) or STATE (read)".
 Now named in the usage text, and pinned by a test so that tidying the method
 into an enum cannot quietly remove the capability.
 
-### A fork-free lock poll is possible — half verified
+### ❌ A fork-free lock poll is NOT possible via the session file
 
-`/run/systemd/sessions/<id>` is world-readable (`-rw-r--r-- root:root`) and
-carries `USER=`, `ACTIVE=`, `STATE=`, `SERVICE=`. Reading it costs no fork,
-where `loginctl` costs two processes per poll.
+**My own suggestion, and it is wrong.** Recorded rather than deleted, because
+the reasoning is the useful part.
 
-⚠ **Only the unlocked case is verified.** While unlocked the file contains no
-`LOCKED_HINT` line at all, so the locked case presumably adds
-`LOCKED_HINT=1` — presumably, because confirming it means flipping the hint,
-which makes the running daemon drive the panel. Not assumed, not implemented.
+The idea: `/run/systemd/sessions/<id>` is world-readable and carries `USER=`,
+`ACTIVE=`, `STATE=`, `SERVICE=`, so reading it would cost no fork where
+`loginctl` costs two processes per poll. Since the file has no `LOCKED_HINT`
+line while unlocked, the locked case would presumably add one.
 
-Settling it costs one command and one panel transition:
-`busctl call org.freedesktop.login1 /org/freedesktop/login1/session/_3<id> org.freedesktop.login1.Session SetLockedHint b true`
-sets the hint **without** locking the screen. Still to do — reading the file
-while the hint is set is the whole of it.
+It does not. Measured — hint held for 3 s via `SetLockedHint`, then the whole
+file dumped:
+
+```
+loginctl show-session 3 -p LockedHint --value   ->  yes
+grep LOCKED /run/systemd/sessions/3             ->  (nothing)
+stat -c %y /run/systemd/sessions/3              ->  2026-09-20 17:19:00
+```
+
+The mtime is **six days old**: the file was never rewritten, so this is not a
+read racing systemd's serialisation. `LockedHint` lives in logind's memory and
+is exposed only over D-Bus. The file's own first line is
+`# This is private data. Do not parse.`
+
+**If the 10 s latency ever needs fixing, the path is the system bus, not a
+file.** `org.freedesktop.login1` lives on the *system* bus, which a
+system-scope daemon can reach — the code comment's "no session bus" objection
+does not apply to it. A `PropertiesChanged` match on the session object gives
+instant, fork-free notification. The cost is a libsystemd/sd-bus dependency in
+a project that currently has none, for a decorative panel. Not recommended
+until someone actually minds the latency.
 
 ### `lock-screen` does change the panel, and it goes black
 
@@ -513,7 +529,7 @@ with `displayInSleep` applied fresh and produced the animation; the variable is
 | Q2 | Does V1.0.11 accept `ContentType: png`? | Only after Q1 is yes. |
 | ~~Q3~~ | ~~What is our panel's actual framebuffer geometry?~~ | **Answered §11: 2240×1080.** The KB's 1760×880 is wrong. |
 | Q4 | Do `cpuStatus` and `recovery` exist in V1.0.11? | **Partly answered §11.** `cpuStatus` routes and does nothing. `recovery` deliberately not sent. |
-| Q7 | Does `/run/systemd/sessions/<id>` gain `LOCKED_HINT=1` when locked? | §11 — set the hint, then read the file. Worth it only if the 10 s latency is to be reduced. |
+| ~~Q7~~ | ~~Does `/run/systemd/sessions/<id>` gain `LOCKED_HINT=1` when locked?~~ | **Answered §11: no, and it never will — the file is not rewritten. Use the system bus if latency matters.** |
 | Q5 | Is there a v2 firmware for `cm01` hardware, or is v2 a new board? | Nothing in hand answers this. The SoC matches; the USB identity does not. |
 | Q6 | Does KANALI 2.4.0 actually drive a v1 device, or only enumerate it? | Would need 2.4.0 running against our cooler with a capture. |
 

@@ -663,11 +663,27 @@ int cmd_daemon_start(const std::string& port, bool foreground,
       //
       // The cost is latency: a lock or unlock is now noticed within
       // keepalive_interval rather than within a second. For a decorative panel
-      // that is a fair trade; if it ever is not, cache the answer and re-run
-      // loginctl on the deadline rather than reverting to a 1s poll.
+      // that is a fair trade -- but it is the whole of the "lock does nothing,
+      // unlock restarts the video" report: lock, look, see nothing because the
+      // deadline has not arrived, unlock, and this catches up. `lock-display`
+      // states the window for that reason.
       //
       // Polling at all avoids needing a session bus -- a system-scope daemon
       // has no session of its own.
+      //
+      // Two ways NOT to reduce the latency:
+      //   - A 1s poll. That is what this was, at 170k forks a day.
+      //   - Reading /run/systemd/sessions/<id> instead of forking loginctl.
+      //     Measured 2026-09-26: LockedHint is NOT in that file. The hint was
+      //     held for 3s and the file's mtime stayed six days old, so it is not
+      //     a race -- logind keeps the hint in memory, and the file says
+      //     "This is private data. Do not parse."
+      //
+      // The way that would work is a PropertiesChanged match on the session
+      // object over the SYSTEM bus, where org.freedesktop.login1 lives and
+      // which this daemon can reach. It costs an sd-bus dependency this
+      // project does not otherwise have. Worth it only if someone minds the
+      // latency.
       if (auto locked = session_locked()) {
         if (!last_locked || *last_locked != *locked) {
           if (last_locked && device->is_connected()) {
