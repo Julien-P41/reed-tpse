@@ -396,6 +396,83 @@ casually, so it stops here pending a reason to continue.
 
 ---
 
+## 11. Measured on V1.0.11 — wave 2 (2026-09-26)
+
+### Panel geometry: **2240×1080** (Q3 closed)
+
+```
+$ adb shell wm size
+Physical size: 2240x1080
+$ adb shell dumpsys display | grep -oE 'deviceWidth=[0-9]+, deviceHeight=[0-9]+'
+deviceWidth=2240, deviceHeight=1080
+```
+
+Three independent readings agree (`wm size`, `dumpsys display` device
+dimensions, and its `real` line), density 240.
+
+**The 1760×880 figure carried by the knowledge base is simply wrong.** It is
+not a usable-area measurement or a curved-region figure: `1760` and `880`
+appear nowhere in `dumpsys display`, nowhere in `getprop`, and nowhere in the
+DRM modes. And 2240×1080 is exactly the geometry baked into the v2 firmware's
+own default media filenames (`default_01.mp4.h264_2240x1080`), so both
+generations use the same panel resolution.
+
+### `cpuStatus`: accepted, does nothing
+
+Both `STATE cpuStatus` and `POST cpuStatus {}` return `1 200` with an **empty
+body**. The device parses the frame — `getSerDataByBytes--解析成功` — and it
+reaches the generic `---STATE_POST---` dispatch log, then stops. No
+handler-specific line follows, where `transport` produced
+`---开始文件传输---` at the same point.
+
+So the endpoint is *routable* but has no behaviour behind it on V1.0.11, or
+wants a payload shape we do not know. Per this repo's own rule, an empty body
+with 200 means the endpoint took no action — it is not an error and not proof
+of success. KANALI 2.4.0 declares `cpuStatus` in its request factory but no
+call site passes that literal, so it may simply be a v2 endpoint declared for
+both generations.
+
+### `recovery`: documented, deliberately not sent
+
+Present in KANALI 2.4.0's factory. **Not fired, and not to be fired casually.**
+On a Rockchip device an endpoint named `recovery` most plausibly reboots into
+the recovery partition; the v2 flashing code in the same bundle lists
+`recovery` as a partition and drives an external Rockchip tool. The downside
+risk is a cooler that needs a physical reseat or a reflash, against no
+information worth having.
+
+If it is ever worth settling: do it with the panel already in a known-bad
+state, not on a working machine.
+
+### `DELETE` and `GET` already reach the wire
+
+The roadmap claimed this needed "one enum value and one branch in the request
+builder". **Wrong — there is no enum.** `build_frame` takes the method as a
+plain string and writes it verbatim, and `raw` passes its argument straight
+through, so `raw DELETE <endpoint>` has always been possible. The gap was
+documentation: the usage text said "METHOD is POST (write) or STATE (read)".
+
+Now named in the usage text, and pinned by a test so that tidying the method
+into an enum cannot quietly remove the capability.
+
+### A fork-free lock poll is possible — half verified
+
+`/run/systemd/sessions/<id>` is world-readable (`-rw-r--r-- root:root`) and
+carries `USER=`, `ACTIVE=`, `STATE=`, `SERVICE=`. Reading it costs no fork,
+where `loginctl` costs two processes per poll.
+
+⚠ **Only the unlocked case is verified.** While unlocked the file contains no
+`LOCKED_HINT` line at all, so the locked case presumably adds
+`LOCKED_HINT=1` — presumably, because confirming it means flipping the hint,
+which makes the running daemon drive the panel. Not assumed, not implemented.
+
+Settling it costs one command and one panel transition:
+`busctl call org.freedesktop.login1 /org/freedesktop/login1/session/_3<id> org.freedesktop.login1.Session SetLockedHint b true`
+sets the hint **without** locking the screen, and would also answer the §3
+question of whether `lock-screen` visibly changes the panel.
+
+---
+
 ## Open questions
 
 | # | Question | How to settle it |
@@ -403,8 +480,9 @@ casually, so it stops here pending a reason to continue.
 | ~~Q1~~ | ~~Does V1.0.11 implement `transport`/`transported` block transfer?~~ | **Answered §10: the endpoint and the headers yes, moving bytes no.** |
 | Q1b | What `type` value flips `isReceiverFile` to true? | Variant sweep — unsafe here without a reason. Look for `type` in a v1 capture first. |
 | Q2 | Does V1.0.11 accept `ContentType: png`? | Only after Q1 is yes. |
-| Q3 | What is our panel's actual framebuffer geometry? | Unresolved; 1760×880 (KB) vs 2240×1080 (v2 media). Needs a measurement on our unit. |
-| Q4 | Do `cpuStatus` and `recovery` exist in V1.0.11? | Send and observe. `recovery` is **not** safe to fire blind. |
+| ~~Q3~~ | ~~What is our panel's actual framebuffer geometry?~~ | **Answered §11: 2240×1080.** The KB's 1760×880 is wrong. |
+| Q4 | Do `cpuStatus` and `recovery` exist in V1.0.11? | **Partly answered §11.** `cpuStatus` routes and does nothing. `recovery` deliberately not sent. |
+| Q7 | Does `/run/systemd/sessions/<id>` gain `LOCKED_HINT=1` when locked? | §11 — one `busctl SetLockedHint` call, which also answers §3. |
 | Q5 | Is there a v2 firmware for `cm01` hardware, or is v2 a new board? | Nothing in hand answers this. The SoC matches; the USB identity does not. |
 | Q6 | Does KANALI 2.4.0 actually drive a v1 device, or only enumerate it? | Would need 2.4.0 running against our cooler with a capture. |
 

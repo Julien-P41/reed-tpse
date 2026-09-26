@@ -385,7 +385,10 @@ int main(int argc, char* argv[]) {
   } else if (command == "raw") {
     if (args.size() < 2) {
       std::cerr << "Usage: reed-tpse raw <METHOD> <ENDPOINT> [JSON]\n"
-                   "       METHOD is POST (write) or STATE (read).\n"
+                   "       POST writes, STATE reads. GET and DELETE are also in\n"
+                   "       the protocol's vocabulary; no endpoint is known to\n"
+                   "       accept them, and the method is passed through\n"
+                   "       unvalidated so you can find out.\n"
                    "       --header Name=Value  extra request header, repeatable\n";
       return 1;
     }

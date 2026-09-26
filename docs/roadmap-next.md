@@ -122,6 +122,11 @@ should be recorded as loudly as a positive one.
 
 ## Wave 2 — small wins that stand on their own
 
+**Status: done, 2026-09-26.** Findings in
+[firmware-v2-dissection.md](firmware-v2-dissection.md) §11. Two items came out
+differently from the plan: 2.2 needed no code at all, and 2.3's answer says the
+knowledge base is wrong rather than merely unverified.
+
 Independent of wave 1. Do these whatever the answer.
 
 ### 2.1 `cpuStatus` and `recovery` — declare, do not fire
@@ -138,16 +143,21 @@ Both are in KANALI 2.4.0's dispatch factory and neither is in this driver.
 
 ### 2.2 `DELETE` as a method
 
-One enum value and one branch in the request builder. Cheap, and it stops
-`raw` from being unable to express a quarter of the protocol. No endpoint is
-known to accept it yet — ship the capability, not a command.
+⚠ **This item was based on a false premise.** There is no method enum:
+`build_frame` takes the method as a string and writes it verbatim, and `raw`
+passes its argument through unchanged, so `raw DELETE <endpoint>` already
+worked. The real gap was the usage text, which said "METHOD is POST (write) or
+STATE (read)".
+
+Done as: name all four in the usage text, and add a test so that tidying the
+method into an enum later cannot silently remove the capability.
 
 ### 2.3 Measure the panel
 
-Q3 in the dissection: the KB says 1760×880, v2's own media says 2240×1080, and
-nobody has measured ours. `adb shell wm size` or the equivalent on this
-firmware settles it in one command. It has been wrong-or-unverified in the
-documentation for a year.
+**Answered: 2240×1080.** `adb shell wm size`, corroborated by `dumpsys
+display`. The KB's 1760×880 is not a usable-area figure — those numbers appear
+nowhere on the device — it is simply wrong, and both firmware generations use
+the same 2240×1080 panel.
 
 ### 2.4 Make `lock_media` discoverable
 

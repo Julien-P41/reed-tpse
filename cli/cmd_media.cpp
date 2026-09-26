@@ -466,14 +466,38 @@ int cmd_lock_display(const std::vector<std::string>& args, int brightness,
   if (!cfg) cfg = reed::Config{};
 
   if (args.empty()) {
+    // Say what actually happens, not just which branch is configured. The
+    // unset case was reported as a bug -- "the lock screen does not change the
+    // display, but the unlock restarts the video" -- and that is exactly what
+    // the power-event path does. Naming the behaviour here is cheaper than
+    // diagnosing it again.
     if (cfg->lock_media) {
       std::cout << "Lock display: " << *cfg->lock_media << " at "
-                << cfg->lock_brightness << "% brightness\n";
+                << cfg->lock_brightness << "% brightness\n"
+                   "  On lock the daemon shows that media in place of the "
+                   "firmware standby clip.\n";
     } else {
-      std::cout << "Lock display: (firmware standby clip)\n";
+      std::cout << "Lock display: (none set -- bare power events)\n"
+                   "  On lock the daemon sends `lock-screen` and the firmware "
+                   "decides what to show.\n"
+                   "  On unlock it sends `unlock-screen`, which clears standby "
+                   "and RESTARTS the\n"
+                   "  current media from the beginning. If locking appears to "
+                   "do nothing while\n"
+                   "  unlocking restarts the video, this is why -- set a file "
+                   "to get a real lock\n"
+                   "  screen.\n";
     }
-    std::cout << "  Applies while the daemon is running, unless "
-                 "\"report_lock\" is false.\n";
+    if (!cfg->report_lock) {
+      std::cout << "  ⚠ \"report_lock\" is false in config.json, so NOTHING "
+                   "happens on lock.\n";
+    } else {
+      std::cout << "  Applies while the daemon is running. The lock is noticed "
+                   "within\n"
+                   "  keepalive_interval (" << cfg->keepalive_interval
+                << "s), so a lock/unlock shorter than that\n"
+                   "  is missed entirely.\n";
+    }
     return 0;
   }
 

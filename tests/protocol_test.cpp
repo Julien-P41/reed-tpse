@@ -104,6 +104,16 @@ int main() {
   bool r10 = plain == built;
   printf("no headers changes nothing:      %s\n", r10 ? "yes" : "NO"); fail += !r10;
 
+  // The method is a free string, not an enum. The protocol's vocabulary is
+  // GET/POST/STATE/DELETE and this driver only ever sends two of them -- but
+  // `raw` must be able to put the other two on the wire, because that is how
+  // anyone finds out whether an endpoint accepts them. Asserting it here so a
+  // future "tidy this into an enum" cannot quietly remove the capability.
+  auto del = build_frame("DELETE", "mediaDelete", "{}", "1", 3);
+  const std::string dframe(del.begin(), del.end());
+  bool r11 = dframe.find("DELETE mediaDelete 1\r\n") != std::string::npos;
+  printf("passes DELETE through verbatim:   %s\n", r11 ? "yes" : "NO"); fail += !r11;
+
   printf("%s\n", fail ? "FAILURES" : "all checks passed");
   return fail != 0;
 }
