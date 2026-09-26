@@ -369,6 +369,14 @@ reed-tpse hud config --zone right --metrics "GPU Temperature" --color FF0000
 Two zones, each with its own media, metrics, colour and alignment. An unset
 right zone mirrors the left.
 
+⚠ **The right zone only exists on a split screen.** `hud config --zone right`
+is saved in any mode, but it renders only under Screen Splitting -- the mapping
+reads `hud_right` nowhere else. Configuring it in Full Screen used to report
+"applies within a second" and then show nothing, while `hud status` reported no
+HUD at all because it only ever read the left zone. Both now say so: the
+configure prints "saved, but NOT shown", and `hud status` prints both zones and
+marks an inert right one.
+
 ⚠ **Two heavy videos will not both play.** With two high-bitrate 2160x1080
 clips one half falls back to the standby animation -- the decoder runs out, not
 the protocol. Two images, two small clips, or one heavy clip beside a light one

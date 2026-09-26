@@ -270,6 +270,42 @@ int main() {
     check("left zone unaffected", split.settings.color == "00FF00");
   }
 
+  // The same hud_right, with the screen NOT split. src/mapping.cpp reads
+  // hud_right only under Screen Splitting, so this must not reach the payload
+  // at all -- and nothing asserted that, which is how a Full-Screen state with
+  // hud_right enabled sat on this machine rendering nothing while `hud status`
+  // reported no HUD. Asserting the mapping's silence is the point: the CLI now
+  // warns about this case, and the warning is only correct if the mapping
+  // really does ignore it.
+  std::puts("right-zone HUD outside a split screen:");
+  {
+    reed::DisplayState st;
+    st.media = {"clip.mp4"};
+    st.screen_mode = "Full Screen";
+    st.hud.enabled = false;
+    reed::HudConfig right;
+    right.enabled = true;
+    right.metrics = {"GPU Temperature"};
+    right.color = "FF0000";
+    st.hud_right = right;
+
+    const reed::ScreenConfig cfg = reed::screen_config_from(st);
+    check("not a split payload", !cfg.split);
+    check("right zone contributes no metrics", cfg.split_sysinfo_right.empty());
+    check("left zone still has none", cfg.sysinfo_display.empty());
+
+    // And the colour must not leak either -- the bug would be just as real if
+    // the right zone's styling reached the single-zone settings.
+    check("right zone colour does not leak into settings",
+          cfg.settings.color != "FF0000");
+
+    // Byte level, because an empty vector in the struct could still serialise
+    // a key the firmware acts on.
+    const std::string frame = reed::payload::screen_config(cfg);
+    check("no GPU Temperature anywhere in the frame",
+          frame.find("GPU Temperature") == std::string::npos);
+  }
+
   // The seam between the two files above: everything else here builds a
   // DisplayState in memory, and config_test round-trips a DisplayState without
   // ever turning one into a payload. Between them, a field could be dropped

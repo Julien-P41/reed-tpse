@@ -80,6 +80,16 @@ static std::string trim_copy(std::string v) {
   return v;
 }
 
+// True when the right zone's HUD can actually render: src/mapping.cpp reads
+// hud_right only under Screen Splitting, so an enabled right zone in any other
+// mode is saved state that never reaches the panel. Gating on it here keeps the
+// daemon from pushing telemetry every interval for an overlay that cannot show
+// it -- which is what a stale Full-Screen hud_right did on this machine.
+static bool right_hud_renders(const reed::DisplayState& state) {
+  return state.screen_mode == reed::wire::kScreenSplitting && state.hud_right &&
+         state.hud_right->enabled;
+}
+
 // The session's lock state via logind. Returns nullopt when it cannot be
 // determined -- a system-scope daemon has no session of its own, so the
 // session is located by user name rather than with `self`.
@@ -494,7 +504,7 @@ int cmd_daemon_start(const std::string& port, bool foreground,
   // `fan --smart` even warns that it "needs the daemon running", which was true
   // and not sufficient -- the daemon ran and declined to push for it.
   bool push_telemetry = state->hud.enabled || state->fan_tier.has_value() ||
-                        (state->hud_right && state->hud_right->enabled);
+                        right_hud_renders(*state);
   auto next_sysinfo =
       push_telemetry
           ? now + std::chrono::seconds(state->hud.push_interval_sec)
@@ -573,7 +583,7 @@ int cmd_daemon_start(const std::string& port, bool foreground,
       report_lock = !config || config->report_lock;
       report_shutdown = !config || config->report_shutdown;
       push_telemetry = state->hud.enabled || state->fan_tier.has_value() ||
-                       (state->hud_right && state->hud_right->enabled);
+                       right_hud_renders(*state);
       // Reloading without applying left the daemon holding settings it never
       // sent: any CLI change made while the daemon runs cannot touch the
       // device itself -- the port is exclusive -- so it would sit unapplied

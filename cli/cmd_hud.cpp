@@ -8,6 +8,7 @@
 
 #include "cli_common.hpp"
 #include "cli_commands.hpp"
+#include "reed/wire.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -101,6 +102,26 @@ std::string canonical_hud_label(const std::string& label) {
   return label;
 }
 
+// One zone's settings, so both zones print identically and neither can drift
+// from the other the way a second hand-written copy would.
+void print_hud_zone(const char* title, const reed::HudConfig& h) {
+  std::cout << title << ": " << (h.enabled ? "enabled" : "disabled") << "\n";
+  std::cout << "  Metrics:";
+  if (h.metrics.empty()) std::cout << " (none)";
+  for (const auto& m : h.metrics) std::cout << " [" << m << "]";
+  std::cout << "\n";
+  std::cout << "  Align: " << h.align << "\n";
+  std::cout << "  Color: " << h.color << "\n";
+  std::cout << "  Badges:";
+  if (h.badges.empty()) std::cout << " (none)";
+  for (const auto& b : h.badges) std::cout << " [" << b << "]";
+  std::cout << "\n";
+  std::cout << "  Push interval: " << h.push_interval_sec << "s\n";
+  std::cout << "  Temperature unit: " << h.temperature_unit << "\n";
+  std::cout << "  CPU: " << (h.cpu_name.empty() ? "(auto)" : h.cpu_name) << "\n";
+  std::cout << "  GPU: " << (h.gpu_name.empty() ? "(auto)" : h.gpu_name) << "\n";
+}
+
 }  // namespace
 
 int cmd_hud(const std::string& port, const std::vector<std::string>& args,
@@ -117,22 +138,26 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
       std::cout << "No saved display state.\n";
       return 0;
     }
-    const auto& h = state->hud;
-    std::cout << "HUD: " << (h.enabled ? "enabled" : "disabled") << "\n";
-    std::cout << "  Metrics:";
-    if (h.metrics.empty()) std::cout << " (none)";
-    for (const auto& m : h.metrics) std::cout << " [" << m << "]";
-    std::cout << "\n";
-    std::cout << "  Align: " << h.align << "\n";
-    std::cout << "  Color: " << h.color << "\n";
-    std::cout << "  Badges:";
-    if (h.badges.empty()) std::cout << " (none)";
-    for (const auto& b : h.badges) std::cout << " [" << b << "]";
-    std::cout << "\n";
-    std::cout << "  Push interval: " << h.push_interval_sec << "s\n";
-    std::cout << "  Temperature unit: " << h.temperature_unit << "\n";
-    std::cout << "  CPU: " << (h.cpu_name.empty() ? "(auto)" : h.cpu_name) << "\n";
-    std::cout << "  GPU: " << (h.gpu_name.empty() ? "(auto)" : h.gpu_name) << "\n";
+    // Both zones. Reporting only the left one denied that a HUD existed while
+    // the state held an enabled right zone -- `hud status` said "disabled" and
+    // "(none)" with hud_right carrying GPU Temperature. A status command that
+    // can answer "no HUD" while one is configured is worse than no status
+    // command.
+    const bool split = state->screen_mode == reed::wire::kScreenSplitting;
+    print_hud_zone("HUD", state->hud);
+    if (state->hud_right) {
+      std::cout << "\n";
+      print_hud_zone("HUD (right zone)", *state->hud_right);
+      if (!split) {
+        // src/mapping.cpp reads hud_right only in Screen Splitting, so in any
+        // other mode this block is saved state that cannot reach the panel.
+        std::cout << "  ⚠ Not shown: screen mode is \"" << state->screen_mode
+                  << "\", and the right zone only renders in \""
+                  << reed::wire::kScreenSplitting << "\".\n"
+                     "    `reed-tpse hud clear` removes it; `display --split "
+                     "<l> <r>` makes it visible.\n";
+      }
+    }
     return 0;
   }
 
@@ -343,11 +368,42 @@ int cmd_hud(const std::string& port, const std::vector<std::string>& args,
   }
   if (!save_state_or_report(state)) return 1;
 
+  // The right zone only exists on a split screen: src/mapping.cpp reads
+  // hud_right under `screen_mode == "Screen Splitting"` and nowhere else. This
+  // used to save it and report "applies within a second" regardless, so a
+  // right-zone HUD configured in Full Screen was accepted, never rendered, and
+  // then denied by `hud status`. Saving it is still right -- configure now,
+  // switch to split later -- but saying it applied is not.
+  const bool split = state.screen_mode == reed::wire::kScreenSplitting;
+  const bool inert = zone_right && !split;
+  if (inert) {
+    std::cout << "Right-zone HUD saved, but NOT shown: screen mode is \""
+              << state.screen_mode << "\".\n"
+                 "The right zone renders only in \""
+              << reed::wire::kScreenSplitting
+              << "\" -- use `display --split <left> <right>`.\n";
+    return 0;
+  }
+
   // Apply live if we have a device. Non-fatal if not connected — state is
   // saved and the daemon will apply it on next start.
   if (daemon_holds_port(port)) {
     std::cout << "HUD saved. The daemon holds the port and applies it within "
                  "a second.\n";
+    return 0;
+  }
+
+  // set_overlay carries ONE zone's styling and metrics. Handing it the right
+  // zone's config pushed those values as the single overlay, i.e. onto the
+  // left. There is no overlay-only frame that addresses one half of a split --
+  // only the whole screen config does, and that reloads the video, which the
+  // comment below exists to avoid. So the right zone is left to the daemon,
+  // which applies it through mapping.cpp correctly.
+  if (zone_right) {
+    std::cout << "Right-zone HUD saved. It applies when the daemon next "
+                 "applies state;\n"
+                 "there is no overlay-only frame that addresses one half of a "
+                 "split screen.\n";
     return 0;
   }
 
