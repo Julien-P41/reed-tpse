@@ -214,6 +214,10 @@ megabyte. That is why video goes over adb — not because the serial path does
 not exist, but because it would be unusable for video. For something small it
 is entirely practical.
 
+> **ANSWERED 2026-09-26 — yes, partly. See §10.** The original text of this
+> box follows, unchanged, because the way the question was framed shaped the
+> test.
+>
 > **Open, and worth a careful test:** does V1.0.11 implement this? If it does,
 > `ContentType: png` plus a filename we control is a way to put host-rendered
 > pixels on the panel without adb. It does **not** revive the live-overlay
@@ -298,11 +302,106 @@ before anyone installs 2.4.0 to capture traffic.
 
 ---
 
+## 10. Measured on V1.0.11 — the transport probe (2026-09-26)
+
+Wave 1 of [roadmap-next.md](roadmap-next.md). Daemon stopped, `logcat` captured
+*during* each attempt, one payload per attempt, three attempts total. Device
+state recorded beforehand and restored afterwards; the two probe files were
+deleted from `/sdcard/pcMedia/`.
+
+### The endpoint exists and answers
+
+```
+POST transport 1
+FileName=reedprobe.png  FileSize=512
+{"type":"media","fileSize":512,"fileName":"reedprobe.png"}
+
+1 200  AckNumber=2
+{"state":"success","blockMaxSize":888888888}
+```
+
+Byte-identical in shape to the vendor capture in `vendor-protocol.md`,
+including the nonsense `blockMaxSize` of 888888888.
+
+### The firmware has typed fields for the whole vocabulary
+
+The device's own parse, from `logcat`:
+
+```
+DataHeader{SeqNumber=1, AckNumber=-1, ContentLength=58, ContentType='json',
+           FileName='reedprobe.png', FileSize=512, ContentRange=-1,
+           Counter=-1, Date=1790453916280, msgId=-1}
+```
+
+Not "tolerated and ignored" — parsed into named fields, with `-1` sentinels for
+the ones we left out. `msgId` is the device's name for the `Id` header.
+
+There is a receive-file state machine too: every inbound chunk is preceded by
+`--isReceiverFile--<bool>--fileSize--<n>--fileBytes.length--<n>`, and the
+announce is followed by `---开始文件传输---reedprobe.txt--size--11`
+("begin file transfer").
+
+### 🔴 `ContentRange` is a single integer here, not a range
+
+KANALI 2.4.0 parses it with `e.split("-")`, i.e. `start-end`. V1.0.11 does not:
+
+```
+org.json.JSONException / NumberFormatException: For input string: "0-10"
+```
+
+Sending `ContentRange=0` instead is accepted. **A real v1/v2 protocol
+difference**, and the kind that would have cost hours to find by guessing.
+
+### The announce creates the file
+
+After each successful announce, `adb shell ls -l /sdcard/pcMedia/` showed a new
+**0-byte** file under the announced name. So `transport` is not a no-op
+envelope; it allocates the destination.
+
+### ⚠ But no bytes moved, and that qualifies §5
+
+A second framed `transport` message carrying the payload is rejected — the
+device tries to parse the body as JSON:
+
+```
+---Exception--88---Value hello of type java.lang.String cannot be converted to JSONObject
+```
+
+and `--isReceiverFile--` stays **false** after the announce. So the host→device
+byte path is *not* a framed message, and **not a single byte has been moved
+over serial by this driver.**
+
+**§5 of this document is therefore half right, and the correction in
+`vendor-protocol.md` was worded too strongly.** What is now measured is that
+the *mechanism is present in V1.0.11* — typed headers, a receive-file state
+machine, a "begin file transfer" log line and a real file created. What is not
+shown is that bytes can cross. The original claim it replaced ("there is no
+serial file transfer to implement") is still wrong; "a block transfer exists"
+is more than has been demonstrated. Both go in the record.
+
+The obvious remaining lever is the `type` field — `"media"` was used throughout
+and something else may be what flips `isReceiverFile` to true. That is variant
+sweeping, which this device's deferred-settings behaviour makes unsafe to do
+casually, so it stops here pending a reason to continue.
+
+### Incidental confirmations
+
+- `SeqNumber=1` out came back `AckNumber=2` — wave 0's `AckNumber` correction,
+  verified live and independently of the capture that misled the old doc.
+- The device self-heals from a malformed exchange: 10 s `MSG_TIMEOUT`, then
+  `close` / `open sPort = /dev/ttyGS0`. The `java.io.IOException: Bad file
+  descriptor` in the log belongs to that close and is normal.
+- Device-side serial port is `/dev/ttyGS0` (USB gadget serial), service
+  `com.baiyi.service.serialservice`.
+
+---
+
 ## Open questions
 
 | # | Question | How to settle it |
 |---|---|---|
-| Q1 | Does V1.0.11 implement `transport`/`transported` block transfer? | Announce a tiny file, watch for a reply. Read-only, low risk. |
+| ~~Q1~~ | ~~Does V1.0.11 implement `transport`/`transported` block transfer?~~ | **Answered §10: the endpoint and the headers yes, moving bytes no.** |
+| Q1b | What `type` value flips `isReceiverFile` to true? | Variant sweep — unsafe here without a reason. Look for `type` in a v1 capture first. |
 | Q2 | Does V1.0.11 accept `ContentType: png`? | Only after Q1 is yes. |
 | Q3 | What is our panel's actual framebuffer geometry? | Unresolved; 1760×880 (KB) vs 2240×1080 (v2 media). Needs a measurement on our unit. |
 | Q4 | Do `cpuStatus` and `recovery` exist in V1.0.11? | Send and observe. `recovery` is **not** safe to fire blind. |

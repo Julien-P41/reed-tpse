@@ -264,7 +264,7 @@ int cmd_status(const std::string& port, bool json_output, int watch,
 
 int cmd_raw(const std::string& port, const std::string& method,
                    const std::string& endpoint, const std::string& body,
-                   bool verbose) {
+                   const std::vector<reed::Header>& headers, bool verbose) {
   reed::Device device(port, verbose);
   if (!device.connect()) {
     std::cerr << "Failed to connect to " << port << "\n";
@@ -273,7 +273,7 @@ int cmd_raw(const std::string& port, const std::string& method,
 
   device.drain();
 
-  auto response = device.send_command(method, endpoint, body);
+  auto response = device.send_command(method, endpoint, body, true, headers);
   if (!response) {
     std::cerr << "No response to '" << method << " " << endpoint << "'\n";
     return 1;

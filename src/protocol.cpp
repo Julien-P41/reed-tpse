@@ -60,16 +60,18 @@ std::vector<uint8_t> unescape_data(const std::vector<uint8_t>& data) {
 std::vector<uint8_t> build_frame(const std::string& request_state,
                                  const std::string& cmd_type,
                                  const std::string& content,
-                                 const std::string& version, int ack_number) {
+                                 const std::string& version, int ack_number,
+                                 const std::vector<Header>& extra_headers) {
   std::ostringstream body;
 
   // First line: REQUEST_STATE CMD_TYPE VERSION
   body << request_state << " " << cmd_type << " " << version << "\r\n";
 
   // Headers. The host numbers its own frames with SeqNumber and stamps Date;
-  // AckNumber is the device's field, echoed back in its reply. We used to send
-  // AckNumber here, i.e. format requests like responses -- the device parsed
-  // them anyway but logged `SeqNumber=-1` for every one.
+  // only the device sends AckNumber, and it is its own counter rather than an
+  // echo of ours (see the warning on Response::ack). We used to send AckNumber
+  // here, i.e. format requests like responses -- the device parsed them anyway
+  // but logged `SeqNumber=-1` for every one.
   body << "ContentType=json\r\n";
   body << "ContentLength=" << content.size() << "\r\n";
   body << "SeqNumber=" << ack_number << "\r\n";
@@ -78,6 +80,13 @@ std::vector<uint8_t> build_frame(const std::string& request_state,
               std::chrono::system_clock::now().time_since_epoch())
               .count()
        << "\r\n";
+
+  // Anything the caller wants beyond the four above, verbatim and in order.
+  // Unvalidated on purpose: this is how a header the rest of this code does
+  // not model reaches the device.
+  for (const auto& [name, value] : extra_headers) {
+    body << name << "=" << value << "\r\n";
+  }
 
   // Double CRLF separator + content
   body << "\r\n" << content;

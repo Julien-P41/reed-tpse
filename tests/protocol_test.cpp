@@ -65,6 +65,45 @@ int main() {
   bool r6 = frame.find("AckNumber=") == std::string::npos;
   printf("request carries no AckNumber:    %s\n", r6 ? "yes" : "NO"); fail += !r6;
 
+  // The file-transfer headers. Nothing in this driver implements the block
+  // transfer yet -- these exist so `raw` can ask V1.0.11 whether it does. The
+  // whole value is that they reach the wire verbatim, in order, so that is
+  // what gets asserted rather than merely that build_frame still returns a
+  // frame.
+  const std::vector<Header> xfer = {{"FileName", "probe.png"},
+                                    {"FileSize", "512"},
+                                    {"FileBlockId", "0"},
+                                    {"ContentRange", "0-511"}};
+  auto xf = build_frame("POST", "transport", "{}", "1", 9, xfer);
+  const std::string xframe(xf.begin(), xf.end());
+  bool r7 = true;
+  for (const auto& [name, value] : xfer) {
+    if (xframe.find(name + "=" + value + "\r\n") == std::string::npos) r7 = false;
+  }
+  printf("carries the four file headers:   %s\n", r7 ? "yes" : "NO"); fail += !r7;
+
+  // Order matters to a parser that reads headers positionally, and a map
+  // would have silently sorted these. Checking the sequence catches that.
+  const size_t p_name = xframe.find("FileName=");
+  const size_t p_size = xframe.find("FileSize=");
+  const size_t p_blk  = xframe.find("FileBlockId=");
+  const size_t p_rng  = xframe.find("ContentRange=");
+  bool r8 = p_name < p_size && p_size < p_blk && p_blk < p_rng;
+  printf("keeps the order they were given: %s\n", r8 ? "yes" : "NO"); fail += !r8;
+
+  // Extra headers belong in the header block, not the body. Off-by-one in
+  // the separator would put them after the blank line, where the device
+  // reads them as payload and the frame still parses.
+  const size_t sep = xframe.find("\r\n\r\n");
+  bool r9 = sep != std::string::npos && p_rng < sep;
+  printf("puts them before the body:       %s\n", r9 ? "yes" : "NO"); fail += !r9;
+
+  // A frame that asked for none must be byte-identical to one built before
+  // the parameter existed -- otherwise every existing command changed shape.
+  auto plain = build_frame("POST", "waterBlockScreenId", content, "1", 7);
+  bool r10 = plain == built;
+  printf("no headers changes nothing:      %s\n", r10 ? "yes" : "NO"); fail += !r10;
+
   printf("%s\n", fail ? "FAILURES" : "all checks passed");
   return fail != 0;
 }

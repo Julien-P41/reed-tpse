@@ -189,7 +189,8 @@ class Device {
   std::optional<Response> send_command(const std::string& request_state,
                                        const std::string& cmd_type,
                                        const std::string& content = "",
-                                       bool wait_response = true);
+                                       bool wait_response = true,
+                                       const std::vector<Header>& extra_headers = {});
 
   // Read via the STATE method. The firmware implements no GET; STATE is the
   // read verb and POST is the write verb.

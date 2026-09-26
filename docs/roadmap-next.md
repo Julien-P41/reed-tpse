@@ -63,6 +63,12 @@ Verification: docs only. `git diff` review, no build needed.
 
 ## Wave 1 — the one experiment that decides the rest
 
+**Status: done, 2026-09-26. Result: qualified yes.** The endpoint and the
+header vocabulary are implemented on V1.0.11 and the announce creates a file;
+no bytes have crossed. Full record in
+[firmware-v2-dissection.md](firmware-v2-dissection.md) §10. Wave 3 is
+**not** unblocked — see the note at its head.
+
 **Question:** does V1.0.11 implement `POST transport` / `POST transported`?
 
 This is the hinge. Everything in waves 3 and 4 depends on the answer, and the
@@ -158,9 +164,18 @@ rather than reverting to the 1 s poll that forked 170k processes a day.
 
 ---
 
-## Wave 3 — *conditional on wave 1 succeeding*
+## Wave 3 — *still gated*
 
-If `transport` works on V1.0.11:
+**Wave 1 came back a qualified yes, which is not enough to start this.**
+`upload --serial` needs bytes to cross, and they do not yet: the announce works
+and creates the destination, but the payload path is not a framed `transport`
+message and `isReceiverFile` never flips. Until Q1b is answered, 3.1 has no
+mechanism to build on.
+
+Do **not** start 3.1 on the strength of "transport works". It does, for the
+half that does not move data.
+
+If Q1b is ever answered and bytes do cross:
 
 ### 3.1 `upload --serial`
 

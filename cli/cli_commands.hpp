@@ -9,12 +9,14 @@
 #include <string>
 #include <vector>
 
+#include "reed/protocol.hpp"
+
 int cmd_info(const std::string& port, bool verbose);
 int cmd_status(const std::string& port, bool json_output, int watch,
                bool verbose);
 int cmd_raw(const std::string& port, const std::string& method,
             const std::string& endpoint, const std::string& body,
-            bool verbose);
+            const std::vector<reed::Header>& headers, bool verbose);
 int cmd_rotate(const std::string& port, const std::string& arg, bool force,
                bool verbose);
 int cmd_screen(const std::string& port, const std::string& arg, bool verbose);

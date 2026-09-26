@@ -169,6 +169,8 @@ int main(int argc, char* argv[]) {
   int watch = 0;
 
   std::string command;
+  // `raw --header Name=Value`, in the order given.
+  std::vector<reed::Header> raw_headers;
   std::vector<std::string> args;
 
   // Set by the value-taking helpers below when an argument is missing or
@@ -255,6 +257,20 @@ int main(int argc, char* argv[]) {
       if (!arg_error && ratio != "2:1" && ratio != "1:1") {
         std::cerr << "Unknown --ratio: \"" << ratio << "\"  (2:1 | 1:1)\n";
         return 1;
+      }
+    } else if (arg == "--header") {
+      // Repeatable `Name=Value`, for `raw` only. Unvalidated names on purpose:
+      // the reason this exists is to send headers this code does not model --
+      // the file-transfer four (FileName, FileSize, FileBlockId, ContentRange)
+      // above all. An `=` is required, because a bare name is always a typo.
+      const std::string h = need_value("--header");
+      if (!arg_error) {
+        const size_t eq = h.find('=');
+        if (eq == std::string::npos || eq == 0) {
+          std::cerr << "--header wants Name=Value, got \"" << h << "\"\n";
+          return 1;
+        }
+        raw_headers.emplace_back(h.substr(0, eq), h.substr(eq + 1));
       }
     } else if (arg == "--brightness") {
       brightness = need_int("--brightness");
@@ -369,11 +385,12 @@ int main(int argc, char* argv[]) {
   } else if (command == "raw") {
     if (args.size() < 2) {
       std::cerr << "Usage: reed-tpse raw <METHOD> <ENDPOINT> [JSON]\n"
-                   "       METHOD is POST (write) or STATE (read).\n";
+                   "       METHOD is POST (write) or STATE (read).\n"
+                   "       --header Name=Value  extra request header, repeatable\n";
       return 1;
     }
     return cmd_raw(port, args[0], args[1], args.size() > 2 ? args[2] : "",
-                   verbose);
+                   raw_headers, verbose);
   } else if (command == "sleep-display") {
     if (args.empty()) {
       std::cerr << "Usage: reed-tpse sleep-display <on|off>\n";

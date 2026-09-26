@@ -357,13 +357,15 @@ std::vector<uint8_t> Device::read_response(int timeout_ms) {
 std::optional<Response> Device::send_command(const std::string& request_state,
                                              const std::string& cmd_type,
                                              const std::string& content,
-                                             bool wait_response) {
+                                             bool wait_response,
+                                             const std::vector<Header>& extra_headers) {
   if (fd_ < 0) {
     return std::nullopt;
   }
 
   ++seq_number_;
-  auto frame = build_frame(request_state, cmd_type, content, "1", seq_number_);
+  auto frame =
+      build_frame(request_state, cmd_type, content, "1", seq_number_, extra_headers);
 
   if (verbose_) {
     std::cout << "Sending: " << cmd_type << "\n";

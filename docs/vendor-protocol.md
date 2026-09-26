@@ -303,9 +303,29 @@ POST transported
 
 with a `Transport → Transporting → Transported → Idle` state machine. At 1 KB
 blocks over 115200 that is roughly 90 s per megabyte, which is exactly why
-video goes over adb — the serial path exists and is simply too slow for video.
-Whether **V1.0.11** implements it is untested; see
-[firmware-v2-dissection.md](firmware-v2-dissection.md) §5 and Q1.
+video goes over adb.
+
+**Measured on V1.0.11** (2026-09-26, see
+[firmware-v2-dissection.md](firmware-v2-dissection.md) §10) — a qualified yes:
+
+- `POST transport` is implemented and answers
+  `{"state":"success","blockMaxSize":888888888}`, the same shape as the capture
+  above.
+- The firmware parses `FileName`, `FileSize`, `ContentRange`, `Counter` and
+  `msgId` into named fields. They are not ignored.
+- The announce **creates a 0-byte file** under the announced name.
+- ⚠ **`ContentRange` is a single integer here, not `start-end`.** V1.0.11
+  throws `NumberFormatException: For input string: "0-10"`; 2.4.0 splits on the
+  hyphen. A genuine v1/v2 difference.
+- ⚠ **No bytes have crossed.** A framed `transport` message carrying the
+  payload is parsed as JSON and rejected, and the device's `isReceiverFile`
+  flag stays false after the announce. The byte path is something other than a
+  framed message.
+
+So: the mechanism is present, and the sentence this section used to end with
+("there is no serial file transfer to implement") is wrong. But "a block
+transfer exists" claims more than has been shown — nothing has been
+transferred. Both statements are in the record deliberately.
 
 ## Everything else, verbatim
 

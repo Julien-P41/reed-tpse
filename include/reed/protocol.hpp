@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "picojson.h"
@@ -36,12 +37,26 @@ std::vector<uint8_t> escape_data(const std::vector<uint8_t>& data);
 // Unescape special bytes in data
 std::vector<uint8_t> unescape_data(const std::vector<uint8_t>& data);
 
-// Build a complete protocol frame
+// One `Name=Value` request header beyond the four we always send.
+//
+// The protocol's header vocabulary is twelve names, not the four a normal
+// command needs. `FileName`, `FileSize`, `FileBlockId` and `ContentRange`
+// belong to the block file transfer, which nothing here implements yet -- so
+// they are carried as data rather than given typed setters, and `raw` can put
+// any of them on the wire for probing. See docs/vendor-protocol.md.
+using Header = std::pair<std::string, std::string>;
+
+// Build a complete protocol frame.
+//
+// `extra_headers` are appended after the standard four, in the order given.
+// Nothing validates the names: the point is to be able to send a header this
+// code does not understand.
 std::vector<uint8_t> build_frame(const std::string& request_state,
                                  const std::string& cmd_type,
                                  const std::string& content = "",
                                  const std::string& version = "1",
-                                 int ack_number = 0);
+                                 int ack_number = 0,
+                                 const std::vector<Header>& extra_headers = {});
 
 // Parse a response frame
 std::optional<Response> parse_response(const std::vector<uint8_t>& data);
