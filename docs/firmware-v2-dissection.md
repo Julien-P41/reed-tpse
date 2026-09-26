@@ -468,8 +468,39 @@ which makes the running daemon drive the panel. Not assumed, not implemented.
 
 Settling it costs one command and one panel transition:
 `busctl call org.freedesktop.login1 /org/freedesktop/login1/session/_3<id> org.freedesktop.login1.Session SetLockedHint b true`
-sets the hint **without** locking the screen, and would also answer the §3
-question of whether `lock-screen` visibly changes the panel.
+sets the hint **without** locking the screen. Still to do — reading the file
+while the hint is set is the whole of it.
+
+### `lock-screen` does change the panel, and it goes black
+
+The `SetLockedHint` trick above was run (by Julien, since service control here
+needs his password):
+
+| | Panel |
+|---|---|
+| `SetLockedHint b true` | **black** |
+| `SetLockedHint b false` | media returns |
+
+Two things follow.
+
+**The lock branch works.** Detection, the power event, and the reverse all fire.
+Which leaves the **10 s poll** as the explanation for the original report — "the
+lock screen does not change the aio display, but the unlock restart the video":
+lock, look, see nothing because the deadline has not arrived, unlock, and the
+daemon catches up. A latency complaint, not a broken branch. `lock-display` now
+states that window.
+
+**`--showStandby--` does not mean "standby animation".** The panel went *black*,
+not to the standby clip, with `display_in_sleep: false` and the daemon still
+connected and handshaking. `firmware-notes.md` documented `displayInSleep: false`
+as giving black **after the ~60s disconnect timeout**; it also governs what a
+`lock-screen` event renders while the host is fully connected. So the log line
+means "entered the standby state" and `displayInSleep` decides whether that
+state shows the animation or nothing. Corrected there.
+
+⚠ This does **not** re-open the earlier `shutdown` finding. That was retested
+with `displayInSleep` applied fresh and produced the animation; the variable is
+`displayInSleep`, not which of the three events was sent.
 
 ---
 
@@ -482,7 +513,7 @@ question of whether `lock-screen` visibly changes the panel.
 | Q2 | Does V1.0.11 accept `ContentType: png`? | Only after Q1 is yes. |
 | ~~Q3~~ | ~~What is our panel's actual framebuffer geometry?~~ | **Answered §11: 2240×1080.** The KB's 1760×880 is wrong. |
 | Q4 | Do `cpuStatus` and `recovery` exist in V1.0.11? | **Partly answered §11.** `cpuStatus` routes and does nothing. `recovery` deliberately not sent. |
-| Q7 | Does `/run/systemd/sessions/<id>` gain `LOCKED_HINT=1` when locked? | §11 — one `busctl SetLockedHint` call, which also answers §3. |
+| Q7 | Does `/run/systemd/sessions/<id>` gain `LOCKED_HINT=1` when locked? | §11 — set the hint, then read the file. Worth it only if the 10 s latency is to be reduced. |
 | Q5 | Is there a v2 firmware for `cm01` hardware, or is v2 a new board? | Nothing in hand answers this. The SoC matches; the USB identity does not. |
 | Q6 | Does KANALI 2.4.0 actually drive a v1 device, or only enumerate it? | Would need 2.4.0 running against our cooler with a capture. |
 

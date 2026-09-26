@@ -305,10 +305,26 @@ device log):
 
 | Event | Effect |
 |---|---|
-| `lock-screen` | panel leaves the media for the standby clip |
-| `shutdown` | same -- standby clip |
-| `suspend` | same -- standby clip |
-| `unlock-screen` / `resume` | hides standby, restores the media |
+| `lock-screen` | panel leaves the media for standby |
+| `shutdown` | same |
+| `suspend` | same |
+| `unlock-screen` / `resume` | hides standby, restores the media **from the start** |
+
+⚠ **What "standby" looks like depends on `displayInSleep`.** Measured
+2026-09-26 with `display_in_sleep: false` and the daemon still connected and
+handshaking: `lock-screen` turned the panel **black**, and `unlock-screen`
+brought the media back. Not the standby animation -- black.
+
+That refines what the section below says. `displayInSleep: false` was documented
+as giving black *after the ~60s disconnect timeout expires*; it also governs
+what a `lock-screen` event shows while the host is very much still connected.
+So `--showStandby--` in the log means "entered the standby state", and the
+`displayInSleep` value decides whether that state renders the animation or
+nothing at all.
+
+Method: `busctl call org.freedesktop.login1 /org/freedesktop/login1/session/_3<id> org.freedesktop.login1.Session SetLockedHint b true`
+sets logind's hint without locking the screen, so the daemon's lock branch
+fires on its next poll with nothing else changing. `b false` reverses it.
 
 ⚠ **`shutdown` does not blank the panel.** This table used to claim it did,
 "with `sleep-display on`", and that a black screen was what distinguished it
